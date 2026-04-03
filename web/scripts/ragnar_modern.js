@@ -11458,6 +11458,38 @@ function updateNetworkStats(data) {
     networkStats.innerHTML = html;
 }
 
+function formatSensorName(sensor) {
+    const known = {
+        'cpu_thermal': 'CPU',
+        'cpu-thermal': 'CPU',
+        'cpu_temp': 'CPU',
+        'gpu_thermal': 'GPU',
+        'gpu-thermal': 'GPU',
+        'soc_thermal': 'SoC',
+        'soc-thermal': 'SoC',
+        'acpitz': 'System (ACPI)',
+        'coretemp': 'CPU Core',
+        'k10temp': 'CPU (AMD)',
+        'nvme_composite': 'NVMe SSD',
+        'nvme': 'NVMe SSD',
+        'wifi': 'Wi-Fi',
+        'pch': 'Chipset',
+        'bat': 'Battery',
+    };
+
+    const lower = sensor.toLowerCase().replace(/[_\-\s]+\d*$/, '').replace(/[_\-\s]+/g, '_');
+    for (const [key, label] of Object.entries(known)) {
+        if (lower === key || lower.startsWith(key)) return label;
+    }
+
+    // Fallback: capitalise words, remove trailing numbers/underscores
+    return sensor
+        .replace(/[_\-]+/g, ' ')
+        .replace(/\s*\d+\s*$/, '')
+        .trim()
+        .replace(/\b\w/g, c => c.toUpperCase()) || sensor;
+}
+
 function updateTemperatureDisplay(temperatures) {
     const tempSection = document.getElementById('temperature-section');
     const tempDisplay = document.getElementById('temperature-display');
@@ -11477,7 +11509,7 @@ function updateTemperatureDisplay(temperatures) {
         
         html += `
             <div class="bg-slate-800 rounded p-3">
-                <h4 class="font-medium mb-1 text-sm">${sensor}</h4>
+                <h4 class="font-medium mb-1 text-sm">${formatSensorName(sensor)}</h4>
                 <div class="text-xl font-bold ${tempColor}">${temp.toFixed(1)}°C</div>
             </div>
         `;
