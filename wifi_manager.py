@@ -1849,19 +1849,40 @@ class WiFiManager:
             return False
     
     def remove_known_network(self, ssid):
-        """Remove a network from Ragnar's known networks list - does NOT delete system NetworkManager profiles"""
+        """Remove a network from Ragnar's known networks list AND delete the system NetworkManager profile"""
         try:
+            removed_from_ragnar = False
             original_count = len(self.known_networks)
             self.known_networks = [net for net in self.known_networks if net['ssid'] != ssid]
             
             if len(self.known_networks) < original_count:
                 self.save_wifi_config()
                 self.logger.info(f"Removed {ssid} from Ragnar's known networks list")
-                self.logger.info(f"NOTE: System NetworkManager profile for {ssid} was NOT deleted - it remains available")
-                return True
+                removed_from_ragnar = True
             else:
                 self.logger.warning(f"Network {ssid} not found in Ragnar's known networks")
-                return False
+            
+            # Also delete the NetworkManager system profile so it no longer shows as saved
+            removed_from_nm = False
+            try:
+                result = subprocess.run(
+                    ['sudo', 'nmcli', 'connection', 'delete', ssid],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    self.logger.info(f"Deleted NetworkManager profile for {ssid}")
+                    removed_from_nm = True
+                else:
+                    self.logger.debug(f"No NetworkManager profile found for {ssid}: {result.stderr.strip()}")
+            except Exception as nm_err:
+                self.logger.debug(f"Could not delete NetworkManager profile for {ssid}: {nm_err}")
+            
+            # Invalidate the scan cache so the network list refreshes correctly
+            for iface in list(self.interface_scan_cache.keys()):
+                self.interface_scan_cache.pop(iface, None)
+                self.interface_cache_time.pop(iface, None)
+            
+            return removed_from_ragnar or removed_from_nm
                 
         except Exception as e:
             self.logger.error(f"Error removing known network {ssid}: {e}")
