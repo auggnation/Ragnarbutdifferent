@@ -1249,8 +1249,11 @@ class WiFiManager:
                 rescan_cmd.extend(['ifname', target_iface])
             subprocess.run(rescan_cmd, capture_output=True, timeout=15)
             
-            # Get scan results
-            list_cmd = ['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'dev', 'wifi', 'list']
+            # Give the radio time to complete the scan
+            time.sleep(3)
+            
+            # Get scan results (--rescan no since we already triggered one)
+            list_cmd = ['nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'dev', 'wifi', 'list', '--rescan', 'no']
             if target_iface:
                 list_cmd.extend(['ifname', target_iface])
             result = subprocess.run(list_cmd, capture_output=True, text=True, timeout=15)
@@ -1264,12 +1267,14 @@ class WiFiManager:
                         parts = line.split(':')
                         if len(parts) >= 3 and parts[0]:  # SSID not empty
                             ssid = parts[0]
+                            # Security field may contain colons, rejoin remaining parts
+                            security = ':'.join(parts[2:]) if len(parts) > 3 else (parts[2] if parts[2] else 'Open')
                             # Mark as known if EITHER in Ragnar's list OR has system profile
                             is_known = ssid in ragnar_known or ssid in system_profiles
                             networks.append({
                                 'ssid': ssid,
                                 'signal': int(parts[1]) if parts[1].isdigit() else 0,
-                                'security': parts[2] if parts[2] else 'Open',
+                                'security': security if security else 'Open',
                                 'known': is_known,
                                 'has_system_profile': ssid in system_profiles
                             })
