@@ -105,7 +105,7 @@ python3 << 'PYTHON_EOF'
 import json
 import os
 
-actions_file = "/home/ragnar/ragnar/config/actions.json"
+actions_file = "/home/ragnar/Ragnar/config/actions.json"
 
 try:
     with open(actions_file, 'r') as f:
