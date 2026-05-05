@@ -137,6 +137,11 @@ class WardrivingSession:
     def upsert_network(self, bssid, ssid, security, channel, frequency,
                        rssi, lat, lon, alt, speed, hdop, interface=''):
         """Insert or update a discovered network (thread-safe)."""
+        # Sanitize SSID: strip null bytes and non-printable control characters
+        if ssid:
+            ssid = ssid.replace('\x00', '')
+            if ssid and all(ord(c) < 32 for c in ssid):
+                ssid = ''
         now = datetime.now(timezone.utc).isoformat()
         band = '5GHz' if (frequency and int(frequency) > 4900) else '2.4GHz'
         if frequency and int(frequency) > 5925:
@@ -646,6 +651,10 @@ class WardrivingEngine:
             line = line.strip()
             if line.startswith('BSS '):
                 if current and current.get('bssid'):
+                    # Sanitize SSID: remove null bytes and control chars
+                    ssid = current.get('ssid', '')
+                    if ssid and (('\x00' in ssid) or all(c < ' ' for c in ssid if c != ' ')):
+                        current['ssid'] = ''
                     networks.append(current)
                 # BSS aa:bb:cc:dd:ee:ff(on wlan0) -- associated
                 bssid_match = re.match(r'BSS\s+([0-9a-fA-F:]{17})', line)
@@ -668,23 +677,58 @@ class WardrivingEngine:
                         pass
                 elif line.startswith('freq:'):
                     try:
-                        freq = int(line.split(':')[1].strip())
-                        current['frequency'] = freq
-                        current['channel'] = _freq_to_channel(freq)
+                        # Handle formats: "freq: 2437", "freq: 2437 MHz", etc.
+                        freq_str = re.search(r'(\d+)', line.split(':', 1)[1])
+                        if freq_str:
+                            freq = int(freq_str.group(1))
+                            current['frequency'] = freq
+                            current['channel'] = _freq_to_channel(freq)
                     except (ValueError, IndexError):
                         pass
-                elif 'WPA' in line or 'RSN' in line:
-                    if 'RSN' in line:
-                        current['security'] = 'WPA2'
-                    elif 'WPA' in line and current['security'] != 'WPA2':
+                elif line.startswith('DS Parameter set:'):
+                    # "DS Parameter set: channel 6" — fallback for channel
+                    try:
+                        ch_match = re.search(r'channel\s+(\d+)', line)
+                        if ch_match and current['channel'] == 0:
+                            ch = int(ch_match.group(1))
+                            current['channel'] = ch
+                            # Estimate frequency from channel if not set
+                            if current['frequency'] == 0 and 1 <= ch <= 14:
+                                current['frequency'] = 2407 + ch * 5 if ch < 14 else 2484
+                    except (ValueError, IndexError):
+                        pass
+                elif line.startswith('* primary channel:'):
+                    # HT/VHT operation: "* primary channel: 36"
+                    try:
+                        ch_match = re.search(r'(\d+)', line.split(':', 1)[1])
+                        if ch_match and current['channel'] == 0:
+                            current['channel'] = int(ch_match.group(1))
+                    except (ValueError, IndexError):
+                        pass
+                elif line.startswith('* center freq segment 1:') or line.startswith('center freq 1:'):
+                    # VHT/HE operation center frequency
+                    try:
+                        freq_match = re.search(r'(\d{4,5})', line)
+                        if freq_match and current['frequency'] == 0:
+                            freq = int(freq_match.group(1))
+                            current['frequency'] = freq
+                            if current['channel'] == 0:
+                                current['channel'] = _freq_to_channel(freq)
+                    except (ValueError, IndexError):
+                        pass
+                elif 'RSN:' == line or line.startswith('RSN:'):
+                    current['security'] = 'WPA2'
+                elif 'WPA:' == line or line.startswith('WPA:'):
+                    if current['security'] != 'WPA2':
                         current['security'] = 'WPA1'
-                elif 'WEP' in line:
-                    current['security'] = 'WEP'
                 elif line.startswith('capability:') and 'Privacy' in line:
                     if not current['security']:
                         current['security'] = 'WEP'
 
         if current and current.get('bssid'):
+            ssid = current.get('ssid', '')
+            if ssid and (('\x00' in ssid) or all(c < ' ' for c in ssid if c != ' ')):
+                current['ssid'] = ''
             networks.append(current)
 
         return networks
