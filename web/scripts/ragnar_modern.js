@@ -14756,7 +14756,25 @@ function updateWardrivingUI(status) {
         if (ifInfo) ifInfo.textContent = `Interfaces: ${status.interfaces.join(', ')}`;
     }
 
-    // Serial ESP32 status
+    // GhostESP status bar
+    const ghostBar = document.getElementById('wd-ghost-bar');
+    if (ghostBar) {
+        if (status.serial_connected || status.serial_port) {
+            ghostBar.classList.remove('hidden');
+            const dot = document.getElementById('wd-ghost-status-dot');
+            if (status.serial_connected) {
+                if (dot) dot.className = 'w-2 h-2 rounded-full bg-green-500 animate-pulse';
+            } else {
+                if (dot) dot.className = 'w-2 h-2 rounded-full bg-yellow-500';
+            }
+            updateElement('wd-ghost-port', status.serial_port || '');
+            updateElement('wd-ghost-net-count', String(status.serial_networks || 0));
+        } else {
+            ghostBar.classList.add('hidden');
+        }
+    }
+
+    // Serial ESP32 config card
     updateSerialStatus(status);
 }
 

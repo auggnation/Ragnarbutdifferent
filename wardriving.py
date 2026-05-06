@@ -879,12 +879,16 @@ class WardrivingEngine:
         self._cell_thread = threading.Thread(target=self._cell_scan_loop, daemon=True, name="wardriving-cell")
         self._cell_thread.start()
 
-        # Start serial ESP32 listener (Piglet/GhostESP) if configured
+        # Start serial ESP32 listener (Piglet/GhostESP) - auto-detect or use configured port
         serial_port = self.shared_data.config.get('wardriving_serial_port', '')
+        if not serial_port:
+            serial_port = self._detect_esp32_serial()
         if serial_port:
             self._serial_port = serial_port
+            self.shared_data.config['wardriving_serial_port'] = serial_port
             self._serial_thread = threading.Thread(target=self._serial_listen_loop, daemon=True, name="wardriving-serial")
             self._serial_thread.start()
+            logger.info(f"GhostESP/Piglet auto-detected on {serial_port}")
 
         logger.info(f"Wardriving started: interfaces={self.interfaces}, GPS={gps_ok}, device={self.device_name}")
         return {
@@ -925,6 +929,23 @@ class WardrivingEngine:
         self._serial_port = None
         self.serial_connected = False
         return {'success': True}
+
+    def _detect_esp32_serial(self):
+        """Auto-detect an Espressif ESP32 on /dev/ttyACM* or /dev/ttyUSB*."""
+        import glob
+        candidates = glob.glob('/dev/ttyACM*') + glob.glob('/dev/ttyUSB*')
+        for port in sorted(candidates):
+            try:
+                result = subprocess.run(
+                    ['udevadm', 'info', '-a', port],
+                    capture_output=True, text=True, timeout=3
+                )
+                if 'Espressif' in result.stdout or 'espressif' in result.stdout.lower():
+                    logger.info(f"ESP32 detected on {port}")
+                    return port
+            except Exception:
+                continue
+        return None
 
     def is_running(self):
         return self._running
