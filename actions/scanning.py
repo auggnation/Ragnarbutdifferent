@@ -591,8 +591,14 @@ class NetworkScanner:
                 try:
                     existing_hosts = self.db.get_all_hosts()
                     self.logger.debug(f"Loaded {len(existing_hosts)} existing hosts from SQLite")
-                    
+
+                    _bl_on  = self.blacklistcheck
+                    _mac_bl = self.mac_scan_blacklist
+                    _ip_bl  = self.ip_scan_blacklist
+
                     for host in existing_hosts:
+                        if _bl_on and (host.get('mac') in _mac_bl or host.get('ip') in _ip_bl):
+                            continue
                         mac = host['mac']
                         # Parse IPs (stored as comma-separated in DB, we use ; for compatibility)
                         ips = host['ip'].split(',') if host['ip'] else []
