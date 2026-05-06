@@ -828,6 +828,7 @@ class WardrivingEngine:
         self._serial_port = None
         self.serial_connected = False
         self.serial_networks = 0
+        self._serial_entry_buffer = {}  # Buffer for multi-line GhostESP entries
 
     def start(self, interfaces=None, gps_port=None, device_name=None):
         """Start a wardriving session."""
@@ -1492,10 +1493,18 @@ class WardrivingEngine:
                 self.serial_connected = True
                 logger.info(f"Serial connected: {self._serial_port}")
 
+                # Send scanap command to start WiFi scanning
+                ser.write(b"scanap\r\n")
+                last_scan_time = time.time()
+
                 while self._running:
                     try:
                         raw = ser.readline()
                         if not raw:
+                            # Periodically re-trigger scan every 30s
+                            if time.time() - last_scan_time > 30:
+                                ser.write(b"scanap\r\n")
+                                last_scan_time = time.time()
                             continue
                         line = raw.decode('utf-8', errors='replace').strip()
                         if not line:
@@ -1527,6 +1536,10 @@ class WardrivingEngine:
         gps_lat = pos['lat'] if pos else None
         gps_lon = pos['lon'] if pos else None
         gps_alt = pos.get('alt') if pos else None
+
+        # Skip GhostESP prompt and status lines
+        if line.startswith('ghost-cli>') or line.startswith('Wardrive:') or line.startswith('Registered') or line.startswith('Unsupported'):
+            return
 
         # Try JSON format first (GhostESP style)
         if line.startswith('{'):
@@ -1567,6 +1580,35 @@ class WardrivingEngine:
                 return
             except (json.JSONDecodeError, ValueError):
                 pass
+
+        # Try GhostESP multi-line text format:
+        # [N] SSID: Name,
+        #      BSSID: AA:BB:CC:DD:EE:FF,
+        #      RSSI: -70,
+        #      Channel: 6,
+        #      Band: 2.4GHz,
+        #      Security: WPA2
+        entry_start = re.match(r'^\[(\d+)\]\s*SSID:\s*(.*?)(?:,\s*)?$', line)
+        if entry_start:
+            # Flush previous buffered entry if exists
+            if self._serial_entry_buffer.get('bssid'):
+                self._flush_serial_entry(gps_lat, gps_lon, gps_alt)
+            self._serial_entry_buffer = {'ssid': entry_start.group(2).strip().rstrip(',')}
+            return
+
+        # Parse continuation lines of a multi-line entry
+        if self._serial_entry_buffer is not None and 'ssid' in self._serial_entry_buffer:
+            kv = re.match(r'^\s*(BSSID|RSSI|Channel|Band|Security|Vendor|PMF):\s*(.*?)(?:,\s*)?$', line)
+            if kv:
+                key = kv.group(1).lower()
+                val = kv.group(2).strip().rstrip(',')
+                self._serial_entry_buffer[key] = val
+                return
+            else:
+                # Non-matching line means entry is complete
+                if self._serial_entry_buffer.get('bssid'):
+                    self._flush_serial_entry(gps_lat, gps_lon, gps_alt)
+                self._serial_entry_buffer = {}
 
         # Try WiGLE CSV format (Piglet style)
         # MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,Lat,Lon,Alt,Acc,Type
@@ -1618,3 +1660,37 @@ class WardrivingEngine:
                         interface='esp32-serial'
                     )
                     self.serial_networks += 1
+
+    def _flush_serial_entry(self, gps_lat, gps_lon, gps_alt):
+        """Flush a buffered GhostESP multi-line entry to the session."""
+        buf = self._serial_entry_buffer
+        bssid = buf.get('bssid', '').upper()
+        if not bssid or len(bssid) < 12:
+            return
+
+        ssid = buf.get('ssid', '')
+        if ssid == '(Hidden)':
+            ssid = ''
+        security = buf.get('security', '')
+        channel = 0
+        try:
+            channel = int(buf.get('channel', 0))
+        except (ValueError, TypeError):
+            pass
+        rssi = -80
+        try:
+            rssi = int(buf.get('rssi', -80))
+        except (ValueError, TypeError):
+            pass
+
+        freq = 0
+        if channel:
+            freq = (2407 + channel * 5) if channel <= 14 else (5000 + channel * 5)
+
+        self.session.upsert_network(
+            bssid=bssid, ssid=ssid, security=security,
+            channel=channel, frequency=freq, rssi=rssi,
+            lat=gps_lat, lon=gps_lon, alt=gps_alt, speed=None, hdop=None,
+            interface='esp32-serial'
+        )
+        self.serial_networks += 1
