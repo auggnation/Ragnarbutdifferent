@@ -815,6 +815,7 @@ print('SUCCESS: Set shared_config.json epd_type to $EPD_VERSION')
         ["flask-cors>=4.0.0"]="flask_cors"
         ["psutil>=5.9.0"]="psutil"
         ["logger>=1.4"]="logger"
+        ["pyserial>=3.5"]="serial"
     )
     
     # Install each package individually with retries if not already installed

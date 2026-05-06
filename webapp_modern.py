@@ -2996,6 +2996,22 @@ def update_config():
         # Save configuration
         shared_data.save_config()
 
+        # Auto-install pyserial when wardriving is enabled
+        if data.get('wardriving_enabled') is True:
+            try:
+                import serial  # noqa: F401
+            except ImportError:
+                import subprocess
+                logger.info("Installing pyserial for wardriving GPS support...")
+                try:
+                    subprocess.check_call(
+                        ['pip3', 'install', '--break-system-packages', 'pyserial'],
+                        timeout=60
+                    )
+                    logger.info("pyserial installed successfully")
+                except Exception as pip_err:
+                    logger.warning(f"Failed to install pyserial: {pip_err}")
+
         # Reflect orientation changes immediately for both hardware and screenshots
         from shared import normalize_rotation
         shared_data.screen_reversed = normalize_rotation(shared_data.config.get('screen_reversed', 0))
