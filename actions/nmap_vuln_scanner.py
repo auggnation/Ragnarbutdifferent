@@ -302,6 +302,12 @@ class NmapVulnScanner:
         try:
             # Write to SQLite database
             if mac and mac.lower() not in ['unknown', '00:00:00:00:00:00', '']:
+                _bl_on  = self.shared_data.config.get('blacklistcheck', True)
+                _mac_bl = self.shared_data.config.get('mac_scan_blacklist', [])
+                _ip_bl  = self.shared_data.config.get('ip_scan_blacklist', [])
+                if _bl_on and (mac.lower().strip() in _mac_bl or ip in _ip_bl):
+                    logger.debug(f"Skipping blacklisted host {ip} ({mac}) in vuln scanner")
+                    return
                 self.db.upsert_host(
                     mac=mac.lower().strip(),
                     ip=ip,
@@ -694,11 +700,17 @@ class NmapVulnScanner:
             
             # Update SQLite database (ONLY source of truth)
             if mac and mac.lower() not in ['unknown', '00:00:00:00:00:00', '']:
+                _bl_on  = self.shared_data.config.get('blacklistcheck', True)
+                _mac_bl = self.shared_data.config.get('mac_scan_blacklist', [])
+                _ip_bl  = self.shared_data.config.get('ip_scan_blacklist', [])
+                if _bl_on and (mac.lower().strip() in _mac_bl or ip in _ip_bl):
+                    logger.debug(f"Skipping blacklisted host {ip} ({mac}) in vuln scanner")
+                    return
                 try:
                     # Merge ports
                     all_ports = sorted(set(port_vulnerabilities.keys()), key=lambda x: int(x) if x.isdigit() else 0)
                     ports_str = ','.join(all_ports)
-                    
+
                     # Update host with vulnerability and port information
                     self.db.upsert_host(
                         mac=mac.lower().strip(),
