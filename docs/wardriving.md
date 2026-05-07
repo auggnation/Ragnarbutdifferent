@@ -1,39 +1,39 @@
 # Wardriving — Ragnar + HuginnESP
 
-## Översikt
+## Overview
 
-Ragnars wardriving-motor samlar WiFi-nätverk, BLE-enheter, mobilmaster och GPS-positioner under körning. Data lagras i SQLite per session och kan exporteras till WiGLE CSV eller KML.
+Ragnar's wardriving engine collects WiFi networks, BLE devices, cell towers, and GPS positions while driving. Data is stored in SQLite per session and can be exported to WiGLE CSV or KML.
 
-Systemet har två datakällor:
-- **WiFi-adaptrar (wlan)** — Linux-adaptrar i monitor/managed mode, skannar direkt via `iw`
-- **HuginnESP** — ESP32-S3 via USB serial, skannar WiFi + BLE + hot-detektion
+The system has two data sources:
+- **WiFi adapters (wlan)** — Linux adapters in monitor/managed mode, scanning directly via `iw`
+- **HuginnESP** — ESP32-S3 via USB serial, scanning WiFi + BLE + threat detection
 
-Allt som loggas får automatiskt GPS-koordinater om en GPS-mottagare är ansluten.
+Everything logged automatically receives GPS coordinates if a GPS receiver is connected.
 
 ---
 
-## Hårdvara
+## Hardware
 
 ### HuginnESP (ESP32-S3)
 
-| Egenskap | Värde |
+| Property | Value |
 |----------|-------|
-| Kort | Waveshare ESP32-S3 Smart 86 Box |
+| Board | Waveshare ESP32-S3 Smart 86 Box |
 | Display | 4" 480×480 RGB IPS, GT911 touch (I2C) |
 | Processor | ESP32-S3, 240 MHz |
 | Flash | 16 MB |
 | PSRAM | 8 MB OPI |
 | Serial | USB CDC, 115200 baud |
 | Firmware | [HuginnESP](https://github.com/PierreGode/HuginnESP) (PlatformIO Arduino) |
-| Bibliotek | LovyanGFX 1.1.16, NimBLE-Arduino 1.4.1 |
+| Libraries | LovyanGFX 1.1.16, NimBLE-Arduino 1.4.1 |
 
 ### GPS
 
-Valfri USB GPS-mottagare (NMEA via pyserial). Auto-detekteras vid start.
+Optional USB GPS receiver (NMEA via pyserial). Auto-detected at startup.
 
 ---
 
-## Arkitektur
+## Architecture
 
 ```
 ┌─────────────────────┐     USB Serial      ┌──────────────────┐
@@ -43,7 +43,7 @@ Valfri USB GPS-mottagare (NMEA via pyserial). Auto-detekteras vid start.
 │  ├─ wardriving.py   │   JSON + alerts      │  ├─ WiFi scan    │
 │  ├─ webapp_modern.py│◄────────────────────│  ├─ BLE scan     │
 │  └─ web UI          │                      │  ├─ AirTag det.  │
-│                     │   Kommandon          │  ├─ Flipper det. │
+│                     │   Commands           │  ├─ Flipper det. │
 │  GPS ◄──────────┐   │──────────────────►  │  ├─ Skimmer det. │
 │  (USB NMEA)     │   │   scanap, blescan   │  └─ Pineapple    │
 │                 ▼   │                      │                  │
@@ -53,27 +53,27 @@ Valfri USB GPS-mottagare (NMEA via pyserial). Auto-detekteras vid start.
 
 ---
 
-## HuginnESP Serial-protokoll
+## HuginnESP Serial Protocol
 
-### Kommandon (Ragnar → ESP)
+### Commands (Ragnar → ESP)
 
-| Kommando | Beskrivning |
-|----------|-------------|
-| `scanap` | Starta WiFi-skanning |
+| Command | Description |
+|---------|-------------|
+| `scanap` | Start WiFi scanning |
 | `blescan -f` | BLE filtered (Flipper + AirTag) |
-| `blescan -a` | BLE all (alla enheter + hot-detektion) |
-| `capture -skimmer` | BLE skimmer-detektion |
-| `pineap` | Pineapple/Evil Twin-detektion |
-| `stop` | Stoppa aktiv skanning, återgå till auto-cykel |
-| `capture -stop` | Stoppa BLE capture |
-| `status` | Hämta aktuellt läge (JSON) |
+| `blescan -a` | BLE all (all devices + threat detection) |
+| `capture -skimmer` | BLE skimmer detection |
+| `pineap` | Pineapple/Evil Twin detection |
+| `stop` | Stop active scan, return to auto-cycle |
+| `capture -stop` | Stop BLE capture |
+| `status` | Get current mode (JSON) |
 
-### Scan-cykel
+### Scan Cycle
 
-Ragnar roterar genom dessa steg:
+Ragnar rotates through these steps:
 
-| Steg | Kommando | Duration | Mode-etikett |
-|------|----------|----------|--------------|
+| Step | Command | Duration | Mode label |
+|------|---------|----------|------------|
 | 1 | `scanap` | 15s | wifi |
 | 2 | `blescan -f` | 8s | ble-filtered |
 | 3 | `scanap` | 15s | wifi |
@@ -83,16 +83,16 @@ Ragnar roterar genom dessa steg:
 | 7 | `scanap` | 15s | wifi |
 | 8 | `pineap` | 10s | pineap |
 
-Total cykel: ~94 sekunder.
+Total cycle: ~94 seconds.
 
-### Serial-output (ESP → Ragnar)
+### Serial Output (ESP → Ragnar)
 
-#### WiFi-nätverk (JSON, en rad per AP)
+#### WiFi Networks (JSON, one line per AP)
 ```json
 {"type":"WIFI","mac":"38:E1:F4:F6:79:26","ssid":"Tele2_F67926","rssi":-84,"channel":1,"auth":"WPA2"}
 ```
 
-#### BLE-enheter (JSON, ALL-mode, en rad per enhet)
+#### BLE Devices (JSON, ALL mode, one line per device)
 ```json
 {"type":"BLE","mac":"AA:BB:CC:DD:EE:FF","name":"DeviceName","rssi":-60}
 ```
@@ -122,7 +122,7 @@ RSSI: -55
 Reason: Suspicious BLE module near payment terminal
 ```
 
-Kända skimmer-namn: `HC-05`, `HC-06`, `HC-08`, `BT05`, `BT06`, `JDY-30`, `JDY-31`, `JDY-33`, `SPP-CA`
+Known skimmer names: `HC-05`, `HC-06`, `HC-08`, `BT05`, `BT06`, `JDY-30`, `JDY-31`, `JDY-33`, `SPP-CA`
 
 #### Pineapple/Evil Twin (multi-line)
 ```
@@ -131,18 +131,18 @@ BSSID: AA:BB:CC:DD:EE:FF
 Channel: 6
 ```
 
-#### BLE Spam (en rad)
+#### BLE Spam (single line)
 ```
 BLE Spam detected from AA:BB:CC:DD:EE:FF
 ```
-Triggas vid 20+ advertisements från samma MAC inom 5 sekunder.
+Triggered at 20+ advertisements from the same MAC within 5 seconds.
 
-#### Status (JSON, svar på `status`-kommando)
+#### Status (JSON, response to `status` command)
 ```json
 {"mode":"auto","wifi_count":5,"ble_count":12}
 ```
 
-#### Boot-meddelanden
+#### Boot Messages
 ```
 [BOOT] HuginnESP starting...
 [BOOT] Free heap: 234567
@@ -158,53 +158,53 @@ Triggas vid 20+ advertisements från samma MAC inom 5 sekunder.
 
 ## Ragnar Parser
 
-`wardriving.py → _parse_serial_line()` hanterar all output:
+`wardriving.py → _parse_serial_line()` handles all output:
 
-| Datatyp | Detektering | Lagring | GPS |
-|---------|-------------|---------|-----|
+| Data type | Detection | Storage | GPS |
+|-----------|-----------|---------|-----|
 | WiFi JSON | `line.startswith('{')` → `type == WIFI` | `upsert_network()` | ✅ |
 | BLE JSON | `line.startswith('{')` → `type == BLE` | `upsert_bluetooth()` | ✅ |
 | AirTag | `line.startswith('AirTag found')` → buffer | `upsert_bluetooth('AirTag')` | ✅ |
 | Flipper | `re.match('Found .* Flipper')` → buffer | `upsert_bluetooth('Flipper')` | ✅ |
 | Skimmer | `'POTENTIAL SKIMMER' in line` → buffer | `upsert_bluetooth('Skimmer')` | ✅ |
-| Pineapple | `'Pineapple detected' in line` | `_esp_alerts` lista | ✅ |
-| BLE Spam | `'BLE Spam detected' in line` | `_esp_alerts` lista | ✅ |
-| WiGLE CSV | Komma-separerad med MAC-format | `upsert_network()` / `upsert_bluetooth()` | ✅ |
+| Pineapple | `'Pineapple detected' in line` | `_esp_alerts` list | ✅ |
+| BLE Spam | `'BLE Spam detected' in line` | `_esp_alerts` list | ✅ |
+| WiGLE CSV | Comma-separated with MAC format | `upsert_network()` / `upsert_bluetooth()` | ✅ |
 | Multi-line WiFi | `[N] SSID: ...` → buffer | `upsert_network()` | ✅ |
 
-Rader som ignoreras:
+Ignored lines:
 - `huginn>`, `Wardrive:`, `Registered`, `Unsupported`
 - `WiFi scan`, `Started`, `Stopped`, `Usage:`, `BLE initialized`, etc.
-- `[BOOT]`-prefix (ej explicit men matchas inte av någon parser)
+- `[BOOT]` prefix (not explicitly filtered but matches no parser)
 
 ---
 
-## API-endpoints
+## API Endpoints
 
-| Metod | Endpoint | Beskrivning |
-|-------|----------|-------------|
-| GET | `/api/wardriving/status` | Fullständig status inkl. GPS, serial, räknare |
-| POST | `/api/wardriving/start` | Starta wardriving-session |
-| POST | `/api/wardriving/stop` | Stoppa session |
-| GET | `/api/wardriving/networks` | Lista fångade WiFi-nätverk |
-| GET | `/api/wardriving/bluetooth` | Lista BLE-enheter |
-| GET | `/api/wardriving/cells` | Lista mobilmaster |
-| GET | `/api/wardriving/sessions` | Lista sessioner |
-| GET | `/api/wardriving/export/<id>` | Exportera session (WiGLE CSV / KML) |
-| POST | `/api/wardriving/import` | Importera WiGLE CSV |
-| GET | `/api/wardriving/gps` | GPS-status |
-| GET | `/api/wardriving/interfaces` | Tillgängliga WiFi-gränssnitt |
-| GET | `/api/wardriving/serial/detect` | Auto-detektera ESP32 port |
-| GET/POST | `/api/wardriving/serial` | Serial-status / starta/stoppa listener |
-| GET | `/api/wardriving/track` | GPS-spår (lat/lon historik) |
-| POST | `/api/wardriving/device_name` | Sätt enhetsnamn |
-| GET/POST | `/api/wardriving/on_boot` | Auto-start vid boot |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/wardriving/status` | Full status incl. GPS, serial, counters |
+| POST | `/api/wardriving/start` | Start wardriving session |
+| POST | `/api/wardriving/stop` | Stop session |
+| GET | `/api/wardriving/networks` | List captured WiFi networks |
+| GET | `/api/wardriving/bluetooth` | List BLE devices |
+| GET | `/api/wardriving/cells` | List cell towers |
+| GET | `/api/wardriving/sessions` | List sessions |
+| GET | `/api/wardriving/export/<id>` | Export session (WiGLE CSV / KML) |
+| POST | `/api/wardriving/import` | Import WiGLE CSV |
+| GET | `/api/wardriving/gps` | GPS status |
+| GET | `/api/wardriving/interfaces` | Available WiFi interfaces |
+| GET | `/api/wardriving/serial/detect` | Auto-detect ESP32 port |
+| GET/POST | `/api/wardriving/serial` | Serial status / start/stop listener |
+| GET | `/api/wardriving/track` | GPS track (lat/lon history) |
+| POST | `/api/wardriving/device_name` | Set device name |
+| GET/POST | `/api/wardriving/on_boot` | Auto-start on boot |
 
 ---
 
-## Status-objekt
+## Status Object
 
-`GET /api/wardriving/status` returnerar:
+`GET /api/wardriving/status` returns:
 
 ```json
 {
@@ -235,75 +235,75 @@ Rader som ignoreras:
 
 ---
 
-## Datalagring
+## Data Storage
 
-Varje session skapar en SQLite-databas i `data/networks/`.
+Each session creates a SQLite database in `data/networks/`.
 
-### Tabell: networks
-| Kolumn | Typ | Beskrivning |
-|--------|-----|-------------|
-| bssid | TEXT | MAC-adress (primärnyckel) |
-| ssid | TEXT | Nätverksnamn |
+### Table: networks
+| Column | Type | Description |
+|--------|------|-------------|
+| bssid | TEXT | MAC address (primary key) |
+| ssid | TEXT | Network name |
 | security | TEXT | WPA2, WPA3, Open, etc. |
-| channel | INT | WiFi-kanal |
-| frequency | INT | Frekvens i MHz |
-| rssi | INT | Signalstyrka (dBm) |
-| lat | REAL | GPS latitud |
-| lon | REAL | GPS longitud |
-| alt | REAL | GPS altitud |
+| channel | INT | WiFi channel |
+| frequency | INT | Frequency in MHz |
+| rssi | INT | Signal strength (dBm) |
+| lat | REAL | GPS latitude |
+| lon | REAL | GPS longitude |
+| alt | REAL | GPS altitude |
 | interface | TEXT | `wlan1`, `esp32-serial`, etc. |
 
-### Tabell: bluetooth
-| Kolumn | Typ | Beskrivning |
-|--------|-----|-------------|
-| mac | TEXT | BLE MAC-adress |
-| name | TEXT | Enhetsnamn |
-| rssi | INT | Signalstyrka |
+### Table: bluetooth
+| Column | Type | Description |
+|--------|------|-------------|
+| mac | TEXT | BLE MAC address |
+| name | TEXT | Device name |
+| rssi | INT | Signal strength |
 | device_type | TEXT | `BLE`, `AirTag`, `Flipper`, `Skimmer` |
-| lat/lon/alt | REAL | GPS-position |
+| lat/lon/alt | REAL | GPS position |
 
 ---
 
 ## Export
 
 ### WiGLE CSV
-Standardformat för uppladdning till wigle.net. Innehåller MAC, SSID, AuthMode, kanal, RSSI, GPS-koordinater.
+Standard format for uploading to wigle.net. Contains MAC, SSID, AuthMode, channel, RSSI, GPS coordinates.
 
 ### KML
-Google Earth-format med nätverkspositioner som markörer.
+Google Earth format with network positions as markers.
 
 ---
 
 ## Setup
 
-### 1. Flasha HuginnESP
+### 1. Flash HuginnESP
 
 ```bash
 cd HuginnESP
-pio run --target upload     # COM8 på Windows, /dev/ttyACM* på Linux
+pio run --target upload     # COM8 on Windows, /dev/ttyACM* on Linux
 ```
 
-### 2. Anslut till Ragnar
+### 2. Connect to Ragnar
 
 **Auto-detect (Linux):**
-Klicka 🔍 Search i web UI → hittar ESP32 automatiskt via `udevadm`.
+Click 🔍 Search in the web UI — finds the ESP32 automatically via `udevadm`.
 
-**Manuellt:**
-Ange port (`/dev/ttyACM0` eller `COM8`) i serial-fältet och klicka Connect.
+**Manual:**
+Enter the port (`/dev/ttyACM0` or `COM8`) in the serial field and click Connect.
 
-### 3. GPS (valfritt)
+### 3. GPS (optional)
 
-Anslut USB GPS-mottagare. Ragnar auto-detekterar NMEA-enheter.
+Connect a USB GPS receiver. Ragnar auto-detects NMEA devices.
 
-### 4. Starta wardriving
+### 4. Start Wardriving
 
-Klicka **Start Wardriving** i web UI. Ragnar börjar skanna med alla aktiva gränssnitt + ESP32 serial.
+Click **Start Wardriving** in the web UI. Ragnar begins scanning with all active interfaces + ESP32 serial.
 
 ---
 
-## Kameraigenkänning
+## Camera Recognition
 
-Ragnar identifierar övervakningskameror baserat på MAC OUI-prefix (tillverkare):
-Axis, Hikvision, Dahua, Vivotek, Bosch, Samsung, Reolink, Amcrest, Foscam m.fl.
+Ragnar identifies surveillance cameras based on MAC OUI prefixes (manufacturers):
+Axis, Hikvision, Dahua, Vivotek, Bosch, Samsung, Reolink, Amcrest, Foscam, and more.
 
-Kameror markeras i nätverkslistan med typ och tillverkare.
+Cameras are marked in the network list with type and manufacturer.
