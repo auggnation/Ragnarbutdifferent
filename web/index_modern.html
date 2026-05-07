@@ -3848,7 +3848,15 @@
 
                 <!-- Session History -->
                 <div class="mt-8">
-                    <h3 class="text-md font-semibold mb-3 text-gray-300">Session History</h3>
+                    <div class="flex items-center justify-between mb-3">
+                        <h3 class="text-md font-semibold text-gray-300">Session History</h3>
+                        <button id="wd-back-live-btn" class="hidden text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1 rounded-lg transition-colors" onclick="selectWardrivingSession(_wdSelectedSessionId)">
+                            &#9654; Back to Live
+                        </button>
+                    </div>
+                    <div id="wd-session-banner" class="hidden mb-2 bg-cyan-900/40 border border-cyan-700/50 rounded-lg px-4 py-2 text-sm text-cyan-300">
+                        Viewing historical session — click again to return to live data
+                    </div>
                     <div id="wd-sessions-list" class="space-y-2">
                         <p class="text-gray-500 text-sm">No previous sessions.</p>
                     </div>

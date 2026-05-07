@@ -6340,10 +6340,16 @@ def wardriving_bluetooth():
     """Get discovered Bluetooth devices."""
     try:
         engine = _get_wardriving_engine()
-        if engine.session:
-            devices = engine.session.get_bluetooth_devices()
-            return jsonify({'devices': devices, 'total': len(devices)})
-        return jsonify({'devices': [], 'total': 0})
+        session_id = request.args.get('session_id')
+        if session_id and (not engine.session or engine.session.session_id != session_id):
+            from wardriving import WardrivingSession
+            session = WardrivingSession(engine.data_dir, session_id=session_id)
+        elif engine.session:
+            session = engine.session
+        else:
+            return jsonify({'devices': [], 'total': 0})
+        devices = session.get_bluetooth_devices()
+        return jsonify({'devices': devices, 'total': len(devices)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -6353,10 +6359,16 @@ def wardriving_cells():
     """Get discovered cell towers."""
     try:
         engine = _get_wardriving_engine()
-        if engine.session:
-            towers = engine.session.get_cell_towers()
-            return jsonify({'towers': towers, 'total': len(towers)})
-        return jsonify({'towers': [], 'total': 0})
+        session_id = request.args.get('session_id')
+        if session_id and (not engine.session or engine.session.session_id != session_id):
+            from wardriving import WardrivingSession
+            session = WardrivingSession(engine.data_dir, session_id=session_id)
+        elif engine.session:
+            session = engine.session
+        else:
+            return jsonify({'towers': [], 'total': 0})
+        towers = session.get_cell_towers()
+        return jsonify({'towers': towers, 'total': len(towers)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

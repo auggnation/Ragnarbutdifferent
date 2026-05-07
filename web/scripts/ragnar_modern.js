@@ -14964,7 +14964,8 @@ function _setWdTableHeaders(type) {
 async function loadWardrivingNetworks() {
     _setWdTableHeaders('wifi');
     try {
-        const res = await fetch('/api/wardriving/networks?limit=200');
+        const sid = _wdSelectedSessionId ? `&session_id=${encodeURIComponent(_wdSelectedSessionId)}` : '';
+        const res = await fetch(`/api/wardriving/networks?limit=200${sid}`);
         const data = await res.json();
         const tbody = document.getElementById('wd-network-table');
         if (!tbody) return;
@@ -15014,7 +15015,8 @@ async function _loadWardrivingBluetooth() {
     const tbody = document.getElementById('wd-network-table');
     if (!tbody) return;
     try {
-        const res = await fetch('/api/wardriving/bluetooth');
+        const sid = _wdSelectedSessionId ? `?session_id=${encodeURIComponent(_wdSelectedSessionId)}` : '';
+        const res = await fetch(`/api/wardriving/bluetooth${sid}`);
         const data = await res.json();
         const devices = data.devices || [];
         if (devices.length === 0) {
@@ -15089,7 +15091,8 @@ async function _loadWardrivingCameras() {
     const tbody = document.getElementById('wd-network-table');
     if (!tbody) return;
     try {
-        const res = await fetch('/api/wardriving/networks?limit=2000');
+        const sid = _wdSelectedSessionId ? `&session_id=${encodeURIComponent(_wdSelectedSessionId)}` : '';
+        const res = await fetch(`/api/wardriving/networks?limit=2000${sid}`);
         const data = await res.json();
         const cameras = (data.networks || []).filter(n => n.is_camera);
         if (cameras.length === 0) {
@@ -15131,18 +15134,45 @@ function renderWardrivingSessions(sessions) {
         container.innerHTML = '<p class="text-gray-500 text-sm">No previous sessions.</p>';
         return;
     }
-    container.innerHTML = sessions.map(s => `
-        <div class="flex flex-wrap items-center justify-between bg-slate-800/40 rounded-lg px-4 py-2 gap-2">
+    container.innerHTML = sessions.map(s => {
+        const isActive = _wdSelectedSessionId === s.session_id;
+        const activeClass = isActive ? 'ring-2 ring-cyan-500 bg-slate-700/60' : 'bg-slate-800/40';
+        const dateStr = s.start_time ? new Date(s.start_time * 1000).toLocaleString() : s.session_id;
+        return `
+        <div class="flex flex-wrap items-center justify-between ${activeClass} rounded-lg px-4 py-2 gap-2 cursor-pointer hover:bg-slate-700/50 transition-colors" onclick="selectWardrivingSession('${s.session_id}')">
             <div>
-                <span class="text-sm font-mono text-gray-300">${s.session_id}</span>
+                <span class="text-sm font-mono text-gray-300">${dateStr}</span>
                 <span class="text-xs text-gray-500 ml-2">${s.total_networks || 0} networks</span>
+                ${isActive ? '<span class="text-xs text-cyan-400 ml-2">● viewing</span>' : ''}
             </div>
             <div class="flex gap-2">
-                <a href="/api/wardriving/export/${encodeURIComponent(s.session_id)}?format=wigle" class="text-xs text-cyan-400 hover:text-cyan-300">WiGLE CSV</a>
-                <a href="/api/wardriving/export/${encodeURIComponent(s.session_id)}?format=kml" class="text-xs text-purple-400 hover:text-purple-300">KML</a>
+                <a href="/api/wardriving/export/${encodeURIComponent(s.session_id)}?format=wigle" class="text-xs text-cyan-400 hover:text-cyan-300" onclick="event.stopPropagation()">WiGLE CSV</a>
+                <a href="/api/wardriving/export/${encodeURIComponent(s.session_id)}?format=kml" class="text-xs text-purple-400 hover:text-purple-300" onclick="event.stopPropagation()">KML</a>
             </div>
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
+}
+
+function selectWardrivingSession(sessionId) {
+    if (_wdSelectedSessionId === sessionId) {
+        _wdSelectedSessionId = null; // deselect = back to live
+    } else {
+        _wdSelectedSessionId = sessionId;
+    }
+    // Show/hide banner and back-to-live button
+    const banner = document.getElementById('wd-session-banner');
+    const backBtn = document.getElementById('wd-back-live-btn');
+    if (banner) banner.classList.toggle('hidden', !_wdSelectedSessionId);
+    if (backBtn) backBtn.classList.toggle('hidden', !_wdSelectedSessionId);
+    // Re-render session list to show active state
+    fetch('/api/wardriving/sessions').then(r => r.json()).then(d => renderWardrivingSessions(d.sessions || []));
+    // Reload table and map with selected session
+    const activeTab = document.querySelector('#wd-table-tabs .wd-tab-active, #wd-table-tabs [class*=\"bg-indigo-600\"]');
+    const type = activeTab?.getAttribute('data-type') || 'wifi';
+    if (type === 'wifi') loadWardrivingNetworks();
+    else if (type === 'bluetooth') _loadWardrivingBluetooth();
+    else if (type === 'cameras') _loadWardrivingCameras();
+    if (_wdMapVisible) loadWardrivingMapData();
 }
 
 // ============================================================================
@@ -15156,6 +15186,7 @@ let _wdMapBtDevices = [];
 let _wdMapCellTowers = [];
 let _wdVikingMarker = null;
 let _wdGpsInterval = null;
+let _wdSelectedSessionId = null; // null = current/live session
 
 const _VIKING_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 50" width="40" height="50">
   <ellipse cx="20" cy="46" rx="8" ry="3" fill="rgba(0,0,0,0.3)"/>
@@ -15256,10 +15287,14 @@ async function _updateVikingPosition() {
 async function loadWardrivingMapData() {
     if (!_wdMap) return;
     try {
+        const sid = _wdSelectedSessionId ? encodeURIComponent(_wdSelectedSessionId) : '';
+        const netUrl = sid ? `/api/wardriving/networks?session_id=${sid}&limit=2000` : '/api/wardriving/networks?limit=2000';
+        const btUrl = sid ? `/api/wardriving/bluetooth?session_id=${sid}` : '/api/wardriving/bluetooth';
+        const cellUrl = sid ? `/api/wardriving/cells?session_id=${sid}` : '/api/wardriving/cells';
         const [netRes, btRes, cellRes] = await Promise.all([
-            fetch('/api/wardriving/networks?limit=2000'),
-            fetch('/api/wardriving/bluetooth'),
-            fetch('/api/wardriving/cells')
+            fetch(netUrl),
+            fetch(btUrl),
+            fetch(cellUrl)
         ]);
         const netData = await netRes.json();
         const btData = await btRes.json();
