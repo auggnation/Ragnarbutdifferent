@@ -637,7 +637,14 @@ class WiFiManager:
         return False
 
     def _endless_loop_start_ap_mode(self):
-        """Start AP mode as part of endless loop"""
+        """Start AP mode as part of endless loop.
+        Skipped when wardriving is enabled — wardriving needs wlan0 for scanning
+        and AP mode (hostapd) would take over the interface.
+        """
+        if self.shared_data.config.get('wardriving_enabled', False):
+            self.logger.info("Endless Loop: AP mode skipped — wardriving is enabled")
+            return
+
         self.logger.info("Endless Loop: Starting AP mode (3 minutes)")
         
         if self.start_ap_mode():

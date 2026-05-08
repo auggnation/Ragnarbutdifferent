@@ -483,7 +483,7 @@ const configMetadata = {
     },
     wardriving_enabled: {
         label: "Enable Wardriving",
-        description: "Enable the wardriving tab for WiFi network discovery with GPS mapping. Requires a USB GPS module for location data."
+        description: "Enable the wardriving tab for WiFi network discovery with GPS mapping. Requires a USB GPS module for location data. Note: Automatic AP mode is disabled while wardriving is enabled — AP mode (hostapd) would take over wlan0 and block WiFi scanning."
     },
     wardriving_display: {
         label: "Wardriving on Display",
