@@ -13245,10 +13245,8 @@ async function checkServerCapabilities() {
 
 // Initialize server mode on page load
 document.addEventListener('DOMContentLoaded', function() {
-    // Delay server mode check slightly to not block initial load
-    setTimeout(() => {
-        checkServerCapabilities();
-    }, 2000);
+    // Run immediately — wardriving tab visibility depends on this
+    checkServerCapabilities();
 });
 
 // ============================================================================
