@@ -4001,8 +4001,25 @@
                 </div>
 
                 <!-- Wardriving Section -->
-                <div class="mb-8 wardriving-feature hidden">
+                <div id="wardriving-config-section" class="mb-8">
                     <h3 class="text-xl font-semibold mb-4 text-Ragnar-400">Wardriving</h3>
+
+                    <!-- Always-visible Enable toggle: gates the rest of the section -->
+                    <div class="glass rounded-lg p-4 mb-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <h4 class="font-medium">Enable Wardriving</h4>
+                                <p class="text-xs text-gray-500 mt-1">Toggle on to reveal wardriving cards and settings.</p>
+                            </div>
+                            <label class="toggle-switch relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="wardriving-enable-toggle" class="sr-only peer" onchange="toggleWardrivingEnabled(this)">
+                                <div class="w-11 h-6 bg-gray-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Everything below is gated by the Enable toggle -->
+                    <div id="wardriving-config-body" class="hidden">
                     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
 
                         <!-- Wardriving on Boot Card -->
@@ -4071,6 +4088,7 @@
                             <button onclick="wipeWardrivingData()" class="bg-red-700 hover:bg-red-600 text-white px-4 py-2 rounded text-xs font-bold transition-colors">🗑️ Wipe Data</button>
                         </div>
                     </div>
+                    </div><!-- /#wardriving-config-body -->
                 </div>
 
                 <!-- Security Section (collapsible) -->

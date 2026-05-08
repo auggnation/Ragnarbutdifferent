@@ -10410,7 +10410,7 @@ function displayConfigForm(config) {
     // Render wardriving config settings into the dedicated Wardriving section slot
     const wdSlot = document.getElementById('wardriving-config-slot');
     if (wdSlot) {
-        const wdKeys = ['wardriving_enabled', 'wardriving_scan_interval', 'wardriving_gps_port', 'wardriving_gps_baudrate', 'wardriving_auto_export'];
+        const wdKeys = ['wardriving_scan_interval', 'wardriving_gps_port', 'wardriving_gps_baudrate', 'wardriving_auto_export'];
         let wdHtml = '<form id="wardriving-config-form" class="bg-slate-800 bg-opacity-50 rounded-lg p-4 mt-4"><h4 class="text-md font-bold mb-4 text-gray-300">Settings</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-4">';
         wdKeys.forEach(key => {
             const hasKey = Object.prototype.hasOwnProperty.call(config, key);
@@ -13212,13 +13212,7 @@ async function checkServerCapabilities() {
 
             // Show/hide wardriving feature based on config
             const wdEnabled = data.features?.wardriving_enabled || false;
-            document.querySelectorAll('.wardriving-feature').forEach(el => {
-                if (wdEnabled) {
-                    el.classList.remove('hidden');
-                } else {
-                    el.classList.add('hidden');
-                }
-            });
+            applyWardrivingEnabledState(wdEnabled);
             
             if (serverModeEnabled) {
                 console.log('[ServerMode] ✅ Server mode enabled - unlocking advanced features');
@@ -14877,6 +14871,29 @@ async function wipeWardrivingData() {
         }
     } catch (e) {
         alert('Wipe failed: ' + e.message);
+    }
+}
+
+function applyWardrivingEnabledState(enabled) {
+    document.querySelectorAll('.wardriving-feature').forEach(el => {
+        el.classList.toggle('hidden', !enabled);
+    });
+    const body = document.getElementById('wardriving-config-body');
+    if (body) body.classList.toggle('hidden', !enabled);
+    const toggle = document.getElementById('wardriving-enable-toggle');
+    if (toggle) toggle.checked = !!enabled;
+}
+
+async function toggleWardrivingEnabled(checkbox) {
+    const enabled = !!checkbox.checked;
+    applyWardrivingEnabledState(enabled);
+    try {
+        await postAPI('/api/config', { wardriving_enabled: enabled });
+        addConsoleMessage('Wardriving ' + (enabled ? 'enabled' : 'disabled'), 'success');
+    } catch (e) {
+        console.error('[Wardriving] enable toggle error:', e);
+        addConsoleMessage('Failed to update wardriving setting', 'error');
+        applyWardrivingEnabledState(!enabled);
     }
 }
 
