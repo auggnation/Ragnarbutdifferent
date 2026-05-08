@@ -157,8 +157,13 @@ class GPSManager:
         logger.info("GPS stopped")
 
     def has_fix(self):
-        """Return True if GPS has a valid position fix."""
-        return self.fix_quality > 0 and self.latitude is not None and self.longitude is not None
+        """Return True if GPS has a valid position fix (not stale)."""
+        if self.fix_quality <= 0 or self.latitude is None or self.longitude is None:
+            return False
+        # Consider fix stale after 10 seconds without update
+        if self.last_update and (time.time() - self.last_update) > 10:
+            return False
+        return True
 
     def get_position(self):
         """Return current position dict (or None if no fix)."""
@@ -315,5 +320,7 @@ class GPSManager:
                         pass
                     self.last_update = time.time()
             else:
-                with self._lock:
-                    self.fix_quality = 0
+                # RMC 'V' (void) — don't reset fix_quality here.
+                # GGA is the authoritative source for fix quality.
+                # Many GPS modules send brief RMC 'V' during movement.
+                pass
