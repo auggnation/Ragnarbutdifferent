@@ -1175,6 +1175,25 @@ class WardrivingEngine:
                     sessions.append({'session_id': sid, 'error': 'corrupt'})
         return sessions
 
+    def wipe_all_data(self):
+        """Delete all wardriving session databases. Requires wardriving to be stopped."""
+        if self._running:
+            return {'error': 'Cannot wipe data while wardriving is running. Stop first.'}
+        wd_dir = os.path.join(self.data_dir, 'wardriving')
+        if not os.path.isdir(wd_dir):
+            return {'success': True, 'deleted': 0}
+        deleted = 0
+        for f in os.listdir(wd_dir):
+            if f.startswith('session_') and f.endswith(('.db', '.db-wal', '.db-shm')):
+                try:
+                    os.remove(os.path.join(wd_dir, f))
+                    deleted += 1
+                except Exception as e:
+                    logger.warning(f"Failed to delete {f}: {e}")
+        self.session = None
+        logger.info(f"Wardriving data wiped: {deleted} files deleted")
+        return {'success': True, 'deleted': deleted}
+
     def _detect_wifi_interfaces(self):
         """Detect all available WiFi interfaces (including external USB adapters)."""
         interfaces = []

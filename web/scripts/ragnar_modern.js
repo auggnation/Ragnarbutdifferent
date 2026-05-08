@@ -14865,6 +14865,23 @@ async function saveWardrivingDeviceName(name) {
     }
 }
 
+async function wipeWardrivingData() {
+    if (!confirm('Are you sure you want to delete ALL wardriving data?\n\nThis will permanently remove all session databases and cannot be undone.')) return;
+    if (!confirm('This is your last chance. Really wipe all wardriving data?')) return;
+    try {
+        const res = await fetch('/api/wardriving/wipe', { method: 'POST' });
+        const data = await res.json();
+        if (data.error) {
+            alert('Error: ' + data.error);
+        } else {
+            alert('Wardriving data wiped. ' + (data.deleted || 0) + ' files deleted.');
+            if (typeof loadWardrivingSessions === 'function') loadWardrivingSessions();
+        }
+    } catch (e) {
+        alert('Wipe failed: ' + e.message);
+    }
+}
+
 async function toggleWardrivingOnBoot() {
     const cb = document.getElementById('wardriving-on-boot');
     if (!cb) return;

@@ -6388,6 +6388,19 @@ def wardriving_set_device_name():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/wardriving/wipe', methods=['POST'])
+def wardriving_wipe_data():
+    """Delete all wardriving session data."""
+    try:
+        engine = _get_wardriving_engine()
+        result = engine.wipe_all_data()
+        if 'error' in result:
+            return jsonify(result), 409
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Wardriving wipe error: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # ============================================================================
 # REAL-TIME SCANNING ENDPOINTS
 # ============================================================================

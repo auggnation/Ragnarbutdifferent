@@ -4060,6 +4060,17 @@
                     </div>
                     <!-- Dynamic wardriving config settings get injected here by displayConfigForm() -->
                     <div id="wardriving-config-slot"></div>
+
+                    <!-- Wipe Wardriving Data -->
+                    <div class="mt-6 pt-4 border-t border-red-900/30">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <h4 class="text-sm font-medium text-red-400">Wipe All Wardriving Data</h4>
+                                <p class="text-xs text-gray-500 mt-1">Permanently delete all session databases. This cannot be undone.</p>
+                            </div>
+                            <button onclick="wipeWardrivingData()" class="bg-red-700 hover:bg-red-600 text-white px-4 py-2 rounded text-xs font-bold transition-colors">🗑️ Wipe Data</button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Security Section (collapsible) -->
