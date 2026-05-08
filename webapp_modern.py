@@ -3172,13 +3172,20 @@ def trigger_subnet_scan():
                 )
                 found = len(results)
                 # Persist discovered hosts into DB
+                _mac_bl = shared_data.config.get('mac_scan_blacklist', [])
+                _ip_bl  = shared_data.config.get('ip_scan_blacklist', [])
+                _bl_on  = shared_data.config.get('blacklistcheck', True)
                 for host, host_data in results.items():
+                    if _bl_on and host in _ip_bl:
+                        continue
                     mac = host_data.get('mac', '')
                     if not mac or mac == '00:00:00:00:00:00':
                         ip_parts = host.split('.')
                         if len(ip_parts) == 4:
                             mac = f"00:00:{int(ip_parts[0]):02x}:{int(ip_parts[1]):02x}:{int(ip_parts[2]):02x}:{int(ip_parts[3]):02x}"
                     if mac:
+                        if _bl_on and mac.lower().strip() in _mac_bl:
+                            continue
                         scanner.db.upsert_host(
                             mac=mac.lower().strip(),
                             ip=host,

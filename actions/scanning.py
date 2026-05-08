@@ -233,7 +233,11 @@ class NetworkScanner:
             for ip, metadata in all_hosts.items():
                 mac = metadata.get('mac', '').lower().strip()
                 vendor = metadata.get('vendor', '')
-                
+
+                if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
+                    self.logger.debug(f"Skipping blacklisted host {ip} ({mac}) in ARP scan")
+                    continue
+
                 if mac and mac != '00:00:00:00:00:00':
                     self.db.upsert_host(
                         mac=mac,
@@ -347,8 +351,13 @@ class NetworkScanner:
                     
                     if mac:
                         mac = mac.lower().strip()
+
+                        if self.blacklistcheck and (mac in self.mac_scan_blacklist or host in self.ip_scan_blacklist):
+                            self.logger.debug(f"Skipping blacklisted host {host} ({mac}) in nmap scan")
+                            continue
+
                         ports_str = ','.join(map(str, sorted(data.get('open_ports', []))))
-                        
+
                         self.db.upsert_host(
                             mac=mac,
                             ip=host,
@@ -485,7 +494,11 @@ class NetworkScanner:
                 for ip, data in ping_discovered.items():
                     mac = data['mac'].lower().strip()
                     vendor = data.get('vendor', '')
-                    
+
+                    if self.blacklistcheck and (mac in self.mac_scan_blacklist or ip in self.ip_scan_blacklist):
+                        self.logger.debug(f"Skipping blacklisted host {ip} ({mac}) in ping sweep")
+                        continue
+
                     self.db.upsert_host(
                         mac=mac,
                         ip=ip,
@@ -578,8 +591,14 @@ class NetworkScanner:
                 try:
                     existing_hosts = self.db.get_all_hosts()
                     self.logger.debug(f"Loaded {len(existing_hosts)} existing hosts from SQLite")
-                    
+
+                    _bl_on  = self.blacklistcheck
+                    _mac_bl = self.mac_scan_blacklist
+                    _ip_bl  = self.ip_scan_blacklist
+
                     for host in existing_hosts:
+                        if _bl_on and (host.get('mac') in _mac_bl or host.get('ip') in _ip_bl):
+                            continue
                         mac = host['mac']
                         # Parse IPs (stored as comma-separated in DB, we use ; for compatibility)
                         ips = host['ip'].split(',') if host['ip'] else []
@@ -1983,31 +2002,35 @@ class NetworkScanner:
                         vuln_summary = "; ".join(vuln_entries)
                     
                     # Update the database
-                    self.db.upsert_host(
-                        mac=host['mac'],
-                        ip=ip,
-                        hostname=hostname if hostname else host.get('hostname', ''),
-                        ports=ports_str,
-                        vulnerabilities=vuln_summary if vuln_summary else host.get('vulnerabilities', ''),
-                        # Mark that this was a deep scan
-                        notes=f"Deep scan: {len(open_ports)} ports, {len(vulnerabilities)} vulns found on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                    )
+                    _bl_on  = self.shared_data.config.get('blacklistcheck', True)
+                    _mac_bl = self.shared_data.config.get('mac_scan_blacklist', [])
+                    _ip_bl  = self.shared_data.config.get('ip_scan_blacklist', [])
+                    if not (_bl_on and (host['mac'] in _mac_bl or ip in _ip_bl)):
+                        self.db.upsert_host(
+                            mac=host['mac'],
+                            ip=ip,
+                            hostname=hostname if hostname else host.get('hostname', ''),
+                            ports=ports_str,
+                            vulnerabilities=vuln_summary if vuln_summary else host.get('vulnerabilities', ''),
+                            notes=f"Deep scan: {len(open_ports)} ports, {len(vulnerabilities)} vulns found on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
                     
                     vuln_msg = f", {len(vulnerabilities)} vulnerable ports" if vulnerabilities else ""
                     self.logger.info(f"✅ Updated SQLite database for {ip}: {len(merged_ports)} total ports ({len(new_ports)} from deep scan{vuln_msg})")
                 else:
                     self.logger.warning(f"IP {ip} not found in database - creating new entry")
-                    # Create new entry with pseudo-MAC if no existing record
-                    pseudo_mac = f"00:00:{':'.join(f'{int(octet):02x}' for octet in ip.split('.'))}"
-                    sorted_ports = sorted([str(p) for p in open_ports], key=lambda x: int(x) if x.isdigit() else 0)
-                    
-                    self.db.upsert_host(
-                        mac=pseudo_mac,
-                        ip=ip,
-                        hostname=hostname if hostname else '',
-                        ports=','.join(sorted_ports),
-                        notes=f"Deep scan: {len(open_ports)} ports found on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                    )
+                    _bl_on  = self.shared_data.config.get('blacklistcheck', True)
+                    _ip_bl  = self.shared_data.config.get('ip_scan_blacklist', [])
+                    if not (_bl_on and ip in _ip_bl):
+                        pseudo_mac = f"00:00:{':'.join(f'{int(octet):02x}' for octet in ip.split('.'))}"
+                        sorted_ports = sorted([str(p) for p in open_ports], key=lambda x: int(x) if x.isdigit() else 0)
+                        self.db.upsert_host(
+                            mac=pseudo_mac,
+                            ip=ip,
+                            hostname=hostname if hostname else '',
+                            ports=','.join(sorted_ports),
+                            notes=f"Deep scan: {len(open_ports)} ports found on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
                     
                     self.logger.info(f"✅ Created new SQLite database entry for {ip}: {len(open_ports)} ports from deep scan")
                     
