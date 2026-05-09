@@ -967,6 +967,10 @@ class WardrivingEngine:
         # Queue of `set ...\r\n` byte-strings for the listener thread to write
         # to Huginn. Webapp thread enqueues; listener owns the serial handle.
         self._huginn_config_queue = queue.Queue()
+        # Per-connection flag: have we pushed the initial Huginn config yet?
+        # Reset by the listener on every reconnect so a late-promoted Huginn
+        # (detected via [BOOT] line after the handshake window) still gets it.
+        self._huginn_handshake_pushed = False
 
     def start(self, interfaces=None, gps_port=None, device_name=None):
         """Start a wardriving session."""
@@ -1887,22 +1891,53 @@ class WardrivingEngine:
                 self.serial_connected = True
                 logger.info(f"Serial connected: {self._serial_port}")
 
-                # Identify companion: send 'status' command
-                # HuginnESP responds with JSON {"mode":...}, Piglet ignores it
+                # Identify companion. Opening pyserial toggles DTR/RTS which
+                # resets the ESP32; Huginn takes ~1.5–2s to boot before it
+                # accepts commands. Read the boot banner first — Huginn emits
+                # `{"device":"HuginnESP",...}` and `[BOOT] HuginnESP starting`
+                # within ~2s. Fall back to an active `status` probe if the
+                # banner is silent (older firmware / Piglet).
+                self._companion_name = ''
+                self._huginn_handshake_pushed = False
                 try:
-                    ser.reset_input_buffer()
-                    ser.write(b"status\r\n")
-                    time.sleep(1)
-                    probe = ser.read(ser.in_waiting or 512).decode('utf-8', errors='replace')
-                    if '{"mode"' in probe or 'HuginnESP' in probe or 'huginn' in probe.lower():
+                    boot_buf = ''
+                    deadline = time.time() + 3.0
+                    while time.time() < deadline:
+                        try:
+                            avail = ser.in_waiting
+                        except Exception:
+                            avail = 0
+                        if avail:
+                            try:
+                                boot_buf += ser.read(avail).decode('utf-8', errors='replace')
+                            except Exception:
+                                pass
+                            if 'HuginnESP' in boot_buf or '[CORE]' in boot_buf or 'Piglet' in boot_buf:
+                                break
+                        time.sleep(0.1)
+
+                    if 'HuginnESP' in boot_buf or 'huginn' in boot_buf.lower():
                         self._companion_name = 'Huginn'
-                    elif 'Piglet' in probe:
+                    elif 'Piglet' in boot_buf or '[CORE]' in boot_buf:
                         self._companion_name = 'Piglet'
                     else:
-                        # No recognizable response to status — likely Piglet (passive CSV output)
-                        self._companion_name = 'Piglet'
+                        # No banner — actively probe with `status`.
+                        ser.reset_input_buffer()
+                        ser.write(b"status\r\n")
+                        time.sleep(1.5)
+                        try:
+                            probe = ser.read(ser.in_waiting or 512).decode('utf-8', errors='replace')
+                        except Exception:
+                            probe = ''
+                        if '{"mode"' in probe or 'HuginnESP' in probe or 'huginn' in probe.lower():
+                            self._companion_name = 'Huginn'
+                        elif 'Piglet' in probe:
+                            self._companion_name = 'Piglet'
+                        else:
+                            self._companion_name = 'Piglet'  # passive CSV fallback
                     logger.info(f"Companion identified: {self._companion_name}")
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Companion identify error: {e}")
                     self._companion_name = 'Companion'  # Unknown fallback
 
                 # Push runtime config to Huginn at handshake. Firmware state is
@@ -1910,6 +1945,7 @@ class WardrivingEngine:
                 if self._companion_name == 'Huginn':
                     for line in self._huginn_initial_push_lines():
                         self._huginn_config_queue.put(line)
+                    self._huginn_handshake_pushed = True
 
                 cycle_index = 0
 
@@ -2007,7 +2043,14 @@ class WardrivingEngine:
         if line.startswith('[MESH]') or line.startswith('[BOOT]'):
             # Auto-detect companion from boot/mesh messages
             if 'HuginnESP' in line:
-                self._companion_name = 'Huginn'
+                if self._companion_name != 'Huginn':
+                    self._companion_name = 'Huginn'
+                # Late promotion: push runtime config if the handshake window
+                # missed the boot banner (slow ESP32 reset, quiet firmware).
+                if not self._huginn_handshake_pushed:
+                    for cfg_line in self._huginn_initial_push_lines():
+                        self._huginn_config_queue.put(cfg_line)
+                    self._huginn_handshake_pushed = True
             elif 'Piglet' in line:
                 self._companion_name = 'Piglet'
             return
