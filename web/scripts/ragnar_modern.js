@@ -14673,9 +14673,10 @@ async function loadWardrivingData() {
         loadHuginnConfig();
 
         if (status.running) {
-            if (!_wardrivingInterval) {
-                _wardrivingInterval = setInterval(refreshWardrivingStatus, 3000);
-            }
+            // Defensive: clear before setting so rapid tab toggles can't stack
+            // multiple intervals (was causing duplicate /api calls per tick).
+            if (_wardrivingInterval) clearInterval(_wardrivingInterval);
+            _wardrivingInterval = setInterval(refreshWardrivingStatus, 3000);
             await loadWardrivingTableByType();
         } else {
             if (_wardrivingInterval) {
@@ -15095,12 +15096,59 @@ async function saveHuginnConfig() {
     }
 }
 
+let _wdLastRenderedType = null;
 function loadWardrivingTableByType() {
     const type = document.getElementById('wd-table-type')?.value || 'wifi';
+    if (_wdLastRenderedType !== type) {
+        // Type switch: tbody currently shows the previous type's rows, so we
+        // must repaint regardless of the cached signature.
+        delete _wdTableSignatures[type];
+        _wdLastRenderedType = type;
+    }
     if (type === 'wifi') loadWardrivingNetworks();
     else if (type === 'bluetooth') _loadWardrivingBluetooth();
     else if (type === 'cell') _loadWardrivingCellTable();
     else if (type === 'cameras') _loadWardrivingCameras();
+}
+
+// Per-table render signature. We avoid re-rendering identical data on every
+// 3s poll, which was causing flicker and scroll-jumps.
+const _wdTableSignatures = {};
+
+function _wdSig(type, items, keyFn) {
+    // Cheap hash: count + sum-of-update-keys + last-id. Catches all real
+    // changes (new rows, scan_count tick) without traversing the full set.
+    let acc = items.length * 1000003;
+    for (let i = 0; i < items.length; i++) acc = (acc + keyFn(items[i])) | 0;
+    const last = items.length ? keyFn(items[items.length - 1]) : 0;
+    return `${type}:${items.length}:${acc}:${last}`;
+}
+
+function _wdShouldRender(type, sig) {
+    if (_wdTableSignatures[type] === sig) return false;
+    _wdTableSignatures[type] = sig;
+    return true;
+}
+
+// Reset the cached signature so a forced reload (session switch, type switch)
+// always paints — necessary when the user wants to see a different dataset.
+function _wdInvalidateTableCache() {
+    for (const k in _wdTableSignatures) delete _wdTableSignatures[k];
+}
+
+// Replace tbody innerHTML while preserving the parent scroll container's
+// scroll position. Without this, every poll snapped the user back to top.
+function _wdSetTbodyHTML(tbody, html) {
+    let scroller = tbody;
+    while (scroller && scroller !== document.body) {
+        const cs = window.getComputedStyle(scroller);
+        if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && scroller.scrollHeight > scroller.clientHeight) break;
+        scroller = scroller.parentElement;
+    }
+    const top = scroller ? scroller.scrollTop : 0;
+    const left = scroller ? scroller.scrollLeft : 0;
+    tbody.innerHTML = html;
+    if (scroller) { scroller.scrollTop = top; scroller.scrollLeft = left; }
 }
 
 const _WD_HEADERS = {
@@ -15125,8 +15173,10 @@ async function loadWardrivingNetworks() {
         if (!tbody) return;
 
         const networks = data.networks || [];
+        const sig = _wdSig('wifi', networks, n => (n.scan_count || 0) + (n.best_rssi || 0));
+        if (!_wdShouldRender('wifi', sig)) return;
         if (networks.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="9" class="text-center text-gray-500 py-8">No networks yet.</td></tr>';
+            _wdSetTbodyHTML(tbody, '<tr><td colspan="9" class="text-center text-gray-500 py-8">No networks yet.</td></tr>');
             return;
         }
 
@@ -15154,7 +15204,7 @@ async function loadWardrivingNetworks() {
             </tr>`;
         }).join('');
 
-        tbody.innerHTML = html;
+        _wdSetTbodyHTML(tbody, html);
         const info = document.getElementById('wd-table-info');
         if (info) info.classList.remove('hidden');
         updateElement('wd-showing', String(networks.length));
@@ -15173,11 +15223,13 @@ async function _loadWardrivingBluetooth() {
         const res = await fetch(`/api/wardriving/bluetooth${sid}`);
         const data = await res.json();
         const devices = data.devices || [];
+        const sig = _wdSig('bluetooth', devices, d => (d.scan_count || 0) + (d.rssi || 0));
+        if (!_wdShouldRender('bluetooth', sig)) return;
         if (devices.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7" class="text-center text-gray-500 py-8">No Bluetooth devices found yet.</td></tr>';
+            _wdSetTbodyHTML(tbody, '<tr><td colspan="7" class="text-center text-gray-500 py-8">No Bluetooth devices found yet.</td></tr>');
             return;
         }
-        tbody.innerHTML = devices.map(d => {
+        const html = devices.map(d => {
             const hasGps = d.latitude && d.longitude;
             const gpsIcon = hasGps
                 ? `<span title="${d.latitude.toFixed(5)}, ${d.longitude.toFixed(5)}" class="text-emerald-400 cursor-help">📍</span>`
@@ -15193,6 +15245,7 @@ async function _loadWardrivingBluetooth() {
                 <td class="px-3 py-1.5 text-xs text-gray-400">${d.scan_count || 1}x</td>
             </tr>`;
         }).join('');
+        _wdSetTbodyHTML(tbody, html);
         const info = document.getElementById('wd-table-info');
         if (info) info.classList.remove('hidden');
         updateElement('wd-showing', String(devices.length));
@@ -15210,11 +15263,13 @@ async function _loadWardrivingCellTable() {
         const res = await fetch('/api/wardriving/cells');
         const data = await res.json();
         const towers = data.towers || [];
+        const sig = _wdSig('cell', towers, t => (t.scan_count || 0) + (t.signal_dbm || 0));
+        if (!_wdShouldRender('cell', sig)) return;
         if (towers.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-gray-500 py-8">No cell towers found yet.</td></tr>';
+            _wdSetTbodyHTML(tbody, '<tr><td colspan="8" class="text-center text-gray-500 py-8">No cell towers found yet.</td></tr>');
             return;
         }
-        tbody.innerHTML = towers.map(t => {
+        const html = towers.map(t => {
             const hasGps = t.latitude && t.longitude;
             const gpsIcon = hasGps
                 ? `<span title="${t.latitude.toFixed(5)}, ${t.longitude.toFixed(5)}" class="text-emerald-400 cursor-help">📍</span>`
@@ -15231,6 +15286,7 @@ async function _loadWardrivingCellTable() {
                 <td class="px-3 py-1.5 text-xs text-gray-400">${t.scan_count || 1}x</td>
             </tr>`;
         }).join('');
+        _wdSetTbodyHTML(tbody, html);
         const info = document.getElementById('wd-table-info');
         if (info) info.classList.remove('hidden');
         updateElement('wd-showing', String(towers.length));
@@ -15249,11 +15305,13 @@ async function _loadWardrivingCameras() {
         const res = await fetch(`/api/wardriving/networks?limit=2000${sid}`);
         const data = await res.json();
         const cameras = (data.networks || []).filter(n => n.is_camera);
+        const sig = _wdSig('cameras', cameras, n => (n.scan_count || 0) + (n.best_rssi || 0));
+        if (!_wdShouldRender('cameras', sig)) return;
         if (cameras.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-gray-500 py-8">No cameras detected yet.</td></tr>';
+            _wdSetTbodyHTML(tbody, '<tr><td colspan="8" class="text-center text-gray-500 py-8">No cameras detected yet.</td></tr>');
             return;
         }
-        tbody.innerHTML = cameras.map(n => {
+        const html = cameras.map(n => {
             const secColor = !n.security || n.security === '--' ? 'text-green-400' :
                              n.security.includes('WEP') ? 'text-yellow-400' : 'text-blue-400';
             const sigColor = n.best_rssi > -50 ? 'text-emerald-400' : n.best_rssi > -70 ? 'text-yellow-400' : 'text-red-400';
@@ -15272,6 +15330,7 @@ async function _loadWardrivingCameras() {
                 <td class="px-3 py-1.5 text-xs text-gray-400">${n.scan_count || 1}x</td>
             </tr>`;
         }).join('');
+        _wdSetTbodyHTML(tbody, html);
         const info = document.getElementById('wd-table-info');
         if (info) info.classList.remove('hidden');
         updateElement('wd-showing', String(cameras.length));
@@ -15317,6 +15376,7 @@ function selectWardrivingSession(sessionId) {
     } else {
         _wdSelectedSessionId = sessionId;
     }
+    _wdInvalidateTableCache();
     // Show/hide banner and back-to-live button
     const banner = document.getElementById('wd-session-banner');
     const backBtn = document.getElementById('wd-back-live-btn');
@@ -15373,10 +15433,10 @@ function toggleWardrivingMap() {
         }
         setTimeout(() => { _wdMap.invalidateSize(); }, 200);
         loadWardrivingMapData();
-        // Start live GPS position updates
-        if (!_wdGpsInterval) {
-            _wdGpsInterval = setInterval(_updateVikingPosition, 3000);
-        }
+        // Start live GPS position updates (clear-before-set so toggling the
+        // map open/closed quickly can't stack intervals).
+        if (_wdGpsInterval) clearInterval(_wdGpsInterval);
+        _wdGpsInterval = setInterval(_updateVikingPosition, 3000);
     } else {
         if (_wdGpsInterval) {
             clearInterval(_wdGpsInterval);
@@ -15398,15 +15458,31 @@ function _wdMarkerColor(sec) {
     return '#3b82f6';
 }
 
+// Last "trusted" position used to suppress stationary GPS jitter on the map.
+let _wdLastFixLat = null;
+let _wdLastFixLon = null;
+
 async function _updateVikingPosition() {
     if (!_wdMap || !_wdMapVisible) return;
     try {
         const res = await fetch('/api/wardriving/gps');
         const gps = await res.json();
         if (gps.has_fix && gps.latitude && gps.longitude) {
-            const lat = gps.latitude;
-            const lon = gps.longitude;
-            const popup = `<b>Ragnar</b><br>${gps.speed_kmh?.toFixed(1) || 0} km/h`;
+            const speed = gps.speed_kmh || 0;
+            const hdop = gps.hdop || 0;
+            // Suppress jitter when standing still with weak fix. Most stationary
+            // drift on consumer GPS is HDOP>3 + speed under ~2 km/h reported as
+            // movement. Freeze the marker until we either move or the fix
+            // sharpens up.
+            const stationary = (speed < 2 && hdop > 3 && _wdLastFixLat !== null);
+            const lat = stationary ? _wdLastFixLat : gps.latitude;
+            const lon = stationary ? _wdLastFixLon : gps.longitude;
+            if (!stationary) {
+                _wdLastFixLat = gps.latitude;
+                _wdLastFixLon = gps.longitude;
+            }
+            const stationaryNote = stationary ? '<br><span style="color:#94a3b8">Stationär (drift dämpad)</span>' : '';
+            const popup = `<b>Ragnar</b><br>${speed.toFixed(1)} km/h${stationaryNote}`;
             if (!_wdVikingMarker) {
                 const icon = L.divIcon({
                     html: _VIKING_ICON_HTML,
