@@ -1243,10 +1243,21 @@ class Display:
 
         wd = self._get_wardriving_data()
         if not wd or not wd.get('running'):
-            stats = [
-                ("Status", "Stopped"),
-                ("Tip", "Enable in WebUI"),
-            ]
+            # If wardriving-on-boot is enabled and the engine has never started
+            # a session yet, show "Starting..." — the engine is racing WiFi
+            # startup. Once a session has existed, fall back to "Stopped" so
+            # a user who manually stopped doesn't see a misleading message.
+            never_started = not (wd and wd.get('session_id'))
+            if self.shared_data.config.get('wardriving_on_boot', False) and never_started:
+                stats = [
+                    ("Status", "Starting..."),
+                    ("Tip", "Waiting for engine"),
+                ]
+            else:
+                stats = [
+                    ("Status", "Stopped"),
+                    ("Tip", "Enable in WebUI"),
+                ]
             self._draw_stat_rows(draw, y, stats)
             return
 
@@ -2446,11 +2457,19 @@ class Display:
                 if self.button_listener and self.button_listener.available:
                     current_page = self.button_listener.current_page
 
-                # Wardriving display override: replace main page when wardriving is running
+                # Wardriving display override: render the wardriving page when
+                # the engine is running, OR — if wardriving-on-boot is set and
+                # the engine has never run yet (no session_id) — render the
+                # "Starting..." placeholder instead of briefly flashing the
+                # regular dashboard. Once a session has existed, we respect
+                # the engine's actual state (running vs. user-stopped).
                 _wd_override = False
                 if current_page == PAGE_MAIN:
                     wd_data = self._get_wardriving_data()
-                    if wd_data and wd_data.get('running'):
+                    wd_boot = self.shared_data.config.get('wardriving_on_boot', False)
+                    is_running = bool(wd_data and wd_data.get('running'))
+                    never_started = not (wd_data and wd_data.get('session_id'))
+                    if is_running or (wd_boot and never_started):
                         self._render_wardriving_page(image, draw)
                         _wd_override = True
 

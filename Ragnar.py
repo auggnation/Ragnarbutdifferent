@@ -71,19 +71,29 @@ class Ragnar:
         if self.pisugar_listener:
             self.pisugar_listener.start()
 
+        # If wardriving-on-boot is enabled, kick wardriving off BEFORE the WiFi
+        # manager starts. wifi_manager.start() blocks ~5s minimum (longer with
+        # no AP available), and wardriving doesn't need WiFi connectivity —
+        # it scans interfaces directly. Running it in a daemon thread also
+        # lets us parallelize the GPS spin-up with WiFi startup, so the
+        # e-paper sees `running == True` within ~1s of boot instead of 20+.
+        wardriving_boot = self.shared_data.config.get('wardriving_on_boot', False)
+        if wardriving_boot:
+            logger.info("Wardriving-on-boot enabled. Starting wardriving early, orchestrator will be suppressed.")
+            self.shared_data.manual_mode = True
+            threading.Thread(
+                target=self._start_wardriving_on_boot,
+                daemon=True,
+                name="wardriving-on-boot",
+            ).start()
+
         # Initialize Wi-Fi management system
         logger.info("Starting Wi-Fi management system...")
         self.wifi_manager.start()
         logger.info("Wi-Fi management system started")
-        
+
         # Main loop to keep Ragnar running
         logger.info("Entering main Ragnar loop...")
-
-        # Check if wardriving-on-boot is enabled
-        if self.shared_data.config.get('wardriving_on_boot', False):
-            logger.info("Wardriving-on-boot enabled. Starting wardriving, orchestrator will be suppressed.")
-            self.shared_data.manual_mode = True
-            self._start_wardriving_on_boot()
 
         loop_count = 0
         while not self.shared_data.should_exit:
@@ -155,34 +165,25 @@ class Ragnar:
             self.shared_data.manual_mode = True
 
     def _start_wardriving_on_boot(self):
-        """Auto-start wardriving engine at boot (called when wardriving_on_boot is True)."""
+        """Auto-start wardriving engine at boot (called when wardriving_on_boot is True).
+
+        Runs in a daemon thread; never block the main loop. GPSManager has its
+        own internal reconnect loop so we only need a single start() — if the
+        USB GPS isn't enumerated yet, scanning still proceeds and GPS attaches
+        as soon as the device shows up.
+        """
         try:
             from wardriving import WardrivingEngine
             self._wd_engine = WardrivingEngine(self.shared_data)
             device_name = self.shared_data.config.get('wardriving_device_name', 'Ragnar')
             gps_port = self.shared_data.config.get('wardriving_gps_port', '') or None
-
-            # At boot, USB devices may not be enumerated yet — retry GPS detection
-            max_retries = 5
-            result = None
-            for attempt in range(1, max_retries + 1):
-                result = self._wd_engine.start(device_name=device_name, gps_port=gps_port)
-                if result.get('gps_available'):
-                    break
-                if attempt < max_retries:
-                    logger.info(f"GPS not ready at boot (attempt {attempt}/{max_retries}), waiting 3s...")
-                    self._wd_engine.stop()
-                    time.sleep(3)
-                    self._wd_engine = WardrivingEngine(self.shared_data)
-
+            result = self._wd_engine.start(device_name=device_name, gps_port=gps_port)
             logger.info(f"Wardriving auto-started on boot: {result}")
             # Store reference so webapp can find it
             import webapp_modern
             webapp_modern._wardriving_engine = self._wd_engine
         except Exception as e:
             logger.error(f"Failed to auto-start wardriving on boot: {e}")
-        else:
-            logger.info("Orchestrator thread is not running.")
 
     def stop(self):
         """Stop Ragnar and cleanup all resources."""
