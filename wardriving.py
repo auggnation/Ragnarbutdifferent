@@ -1834,6 +1834,16 @@ class WardrivingEngine:
         5745, 5765, 5785, 5805, 5825,
     ]
 
+    def _is_associated(self, interface):
+        """True if the interface is currently associated with an AP as a client.
+        Used to decide whether wardriving can claim it exclusively from NM."""
+        try:
+            r = subprocess.run(['iw', 'dev', interface, 'link'],
+                               capture_output=True, text=True, timeout=3)
+            return r.returncode == 0 and 'Connected to' in r.stdout
+        except Exception:
+            return False
+
     def _iface_type(self, interface):
         """Return current iw interface type (managed/monitor/...) or '' on failure."""
         try:
@@ -2051,6 +2061,24 @@ class WardrivingEngine:
         except Exception as e:
             logger.debug(f"rfkill unblock failed: {e}")
 
+        # Claim non-associated interfaces from NetworkManager so its autoscan
+        # doesn't race our scan trigger (kernel returns -EBUSY when NM has a
+        # scan in flight). Skip the management interface (the one currently
+        # connected to an AP) — we must not touch that or we kill WiFi.
+        if not self._is_associated(interface):
+            try:
+                r = subprocess.run(
+                    ['sudo', 'nmcli', 'dev', 'set', interface, 'managed', 'no'],
+                    capture_output=True, text=True, timeout=3
+                )
+                if r.returncode == 0 and interface not in self._iface_prepared:
+                    logger.info(
+                        f"Wardriving: {interface} marked unmanaged in NetworkManager "
+                        f"(prevents autoscan races)"
+                    )
+            except Exception as e:
+                logger.debug(f"nmcli unmanage on {interface} failed: {e}")
+
         # Kill any monitor/AP child interfaces on this phy first.
         self._cleanup_phy_children(interface)
 
@@ -2196,6 +2224,7 @@ class WardrivingEngine:
         # instead of silently returning [] forever.
         if networks:
             self._iface_zero_scans[interface] = 0
+            self._iface_last_error.pop(interface, None)
         else:
             n = self._iface_zero_scans.get(interface, 0) + 1
             self._iface_zero_scans[interface] = n
