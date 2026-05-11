@@ -1117,6 +1117,12 @@ class WardrivingEngine:
         self.serial_connected = False
         self.serial_networks = 0
         self._serial_entry_buffer = {}  # Buffer for multi-line HuginnESP entries
+        # WiGLE CSV header tracking — built when we see the column-header row
+        # right after a `WigleWifi-X.Y,...` banner from Piglet. Used to map
+        # data-row columns by name, so we survive format changes (1.4 → 1.6
+        # added Frequency, RCOIs, MfgrId columns and shifted RSSI/Lat/etc.).
+        self._wigle_col_map = None      # dict like {'mac': 0, 'ssid': 1, ...}
+        self._wigle_expect_header = False  # True for the line right after WigleWifi banner
         self._current_esp_mode = 'wifi'
         self._esp_ble_count = 0
         self._esp_stations = []
@@ -3049,56 +3055,127 @@ class WardrivingEngine:
                     self._flush_serial_entry(gps_lat, gps_lon, gps_alt)
                 self._serial_entry_buffer = {}
 
+        # === WiGLE CSV (Piglet) ===
+        # Header-driven so we survive format changes. Piglet emits two banner
+        # lines per logging session:
+        #   WigleWifi-1.4,appRelease=1,...           ← format banner
+        #   MAC,SSID,AuthMode,FirstSeen,Channel,...  ← column header
+        # We capture the column header into a name→index map and use that map
+        # for all subsequent data rows. Falls back to legacy 1.4 positional
+        # layout if no header has been observed (handles firmware that
+        # streams data rows before sending a banner).
+        if line.startswith('WigleWifi-'):
+            # Piglet v2.5 emits WigleWifi-1.6; older firmware emits 1.4. The
+            # next non-empty line will be the column-name row.
+            self._wigle_expect_header = True
+            self._wigle_col_map = None  # reset — about to receive fresh header
+            return
+
         # Try WiGLE CSV format (Piglet style)
-        # MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,Lat,Lon,Alt,Acc,Type
         parts = line.split(',')
-        if len(parts) >= 8:
-            mac = parts[0].strip().upper()
-            # Validate MAC format
-            if re.match(r'^[0-9A-F]{2}(:[0-9A-F]{2}){5}$', mac):
-                ssid = parts[1].strip() if len(parts) > 1 else ''
-                auth = parts[2].strip() if len(parts) > 2 else ''
-                channel = 0
-                try:
-                    channel = int(parts[4].strip()) if len(parts) > 4 else 0
-                except (ValueError, TypeError):
-                    pass
-                rssi = -80
-                try:
-                    rssi = int(parts[5].strip()) if len(parts) > 5 else -80
-                except (ValueError, TypeError):
-                    pass
-                lat = None
-                lon = None
-                alt = None
-                try:
-                    lat = float(parts[6].strip()) if len(parts) > 6 and parts[6].strip() else gps_lat
-                    lon = float(parts[7].strip()) if len(parts) > 7 and parts[7].strip() else gps_lon
-                    alt = float(parts[8].strip()) if len(parts) > 8 and parts[8].strip() else gps_alt
-                except (ValueError, TypeError):
-                    lat = gps_lat
-                    lon = gps_lon
 
-                record_type = parts[10].strip().upper() if len(parts) > 10 else 'WIFI'
+        # Capture column header if we're expecting one. Recognize by the
+        # presence of 'MAC' or 'BSSID' as the first column, which uniquely
+        # identifies the header row vs a data row (data row[0] is a MAC
+        # address that wouldn't equal the literal string 'MAC').
+        if self._wigle_expect_header and parts and parts[0].strip().upper() in ('MAC', 'BSSID'):
+            col_map = {}
+            for i, h in enumerate(parts):
+                key = h.strip().lower()
+                if key in ('mac', 'bssid'):
+                    col_map['mac'] = i
+                elif key == 'ssid':
+                    col_map['ssid'] = i
+                elif key in ('authmode', 'security', 'auth'):
+                    col_map['auth'] = i
+                elif key in ('firstseen', 'first_seen'):
+                    col_map['firstseen'] = i
+                elif key == 'channel':
+                    col_map['channel'] = i
+                elif key == 'frequency':
+                    col_map['frequency'] = i
+                elif key == 'rssi':
+                    col_map['rssi'] = i
+                elif key in ('currentlatitude', 'latitude', 'lat'):
+                    col_map['lat'] = i
+                elif key in ('currentlongitude', 'longitude', 'lon'):
+                    col_map['lon'] = i
+                elif key in ('altitudemeters', 'altitude', 'alt'):
+                    col_map['alt'] = i
+                elif key in ('accuracymeters', 'accuracy'):
+                    col_map['acc'] = i
+                elif key == 'type':
+                    col_map['type'] = i
+            if 'mac' in col_map:
+                self._wigle_col_map = col_map
+                logger.info(f"Piglet WiGLE column map detected: {len(col_map)} fields")
+            self._wigle_expect_header = False
+            return
 
-                if record_type in ('BT', 'BLE'):
-                    self.session.upsert_bluetooth(mac, ssid, rssi, 'BLE', lat, lon, alt)
-                elif record_type in ('GSM', 'CDMA', 'LTE', 'UMTS', 'CELL'):
-                    self.session.upsert_cell_tower(
-                        cell_id=mac, tech=record_type, provider=ssid,
-                        signal_dbm=rssi, lat=lat, lon=lon
-                    )
-                else:
-                    freq = 0
-                    if channel:
-                        freq = (2407 + channel * 5) if channel <= 14 else (5000 + channel * 5)
-                    self.session.upsert_network(
-                        bssid=mac, ssid=ssid, security=auth,
-                        channel=channel, frequency=freq, rssi=rssi,
-                        lat=lat, lon=lon, alt=alt, speed=None, hdop=None,
-                        interface='esp32-serial'
-                    )
-                    self.serial_networks += 1
+        # Data row — requires at least 8 columns for the minimum useful set
+        if len(parts) < 8:
+            return
+        mac = parts[0].strip().upper()
+        if not re.match(r'^[0-9A-F]{2}(:[0-9A-F]{2}){5}$', mac):
+            return
+
+        # Use captured header map if available; otherwise fall back to the
+        # legacy WiGLE-1.4 positional layout so pre-banner data isn't lost.
+        cm = self._wigle_col_map or {
+            'mac': 0, 'ssid': 1, 'auth': 2, 'firstseen': 3,
+            'channel': 4, 'rssi': 5, 'lat': 6, 'lon': 7,
+            'alt': 8, 'acc': 9, 'type': 10,
+        }
+
+        def _field(name, default=''):
+            idx = cm.get(name)
+            if idx is None or idx >= len(parts):
+                return default
+            return parts[idx].strip()
+
+        ssid = _field('ssid')
+        auth = _field('auth')
+        try:
+            channel = int(_field('channel') or 0)
+        except (ValueError, TypeError):
+            channel = 0
+        try:
+            rssi = int(_field('rssi') or -80)
+        except (ValueError, TypeError):
+            rssi = -80
+        # Frequency from header if present (WiGLE 1.6+), else derive from channel
+        try:
+            freq_str = _field('frequency')
+            freq = int(freq_str) if freq_str else 0
+        except (ValueError, TypeError):
+            freq = 0
+        if not freq and channel:
+            freq = (2407 + channel * 5) if channel <= 14 else (5000 + channel * 5)
+        try:
+            lat = float(_field('lat')) if _field('lat') else gps_lat
+            lon = float(_field('lon')) if _field('lon') else gps_lon
+            alt = float(_field('alt')) if _field('alt') else gps_alt
+        except (ValueError, TypeError):
+            lat, lon = gps_lat, gps_lon
+            alt = gps_alt
+
+        record_type = (_field('type') or 'WIFI').upper()
+
+        if record_type in ('BT', 'BLE'):
+            self.session.upsert_bluetooth(mac, ssid, rssi, 'BLE', lat, lon, alt)
+        elif record_type in ('GSM', 'CDMA', 'LTE', 'UMTS', 'CELL'):
+            self.session.upsert_cell_tower(
+                cell_id=mac, tech=record_type, provider=ssid,
+                signal_dbm=rssi, lat=lat, lon=lon
+            )
+        else:
+            self.session.upsert_network(
+                bssid=mac, ssid=ssid, security=auth,
+                channel=channel, frequency=freq, rssi=rssi,
+                lat=lat, lon=lon, alt=alt, speed=None, hdop=None,
+                interface='esp32-serial'
+            )
+            self.serial_networks += 1
 
     def _flush_serial_entry(self, gps_lat, gps_lon, gps_alt):
         """Flush a buffered HuginnESP multi-line entry to the session."""
