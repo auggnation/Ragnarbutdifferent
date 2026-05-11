@@ -14860,13 +14860,41 @@ function _renderWifiAdaptersBar(status) {
     }
     bar.classList.remove('hidden');
     const bandColors = {'2.4GHz': 'text-emerald-400', '5GHz': 'text-purple-400', '6GHz': 'text-pink-400'};
-    const html = details.map(d => {
+    const cov = status.coverage || {};
+    const perIf = cov.per_interface || {};
+
+    // Color RSSI: stronger (less negative) is better. -50 great, -90 unusable.
+    const rssiColor = (v) => {
+        if (v == null || v === 0) return 'text-gray-500';
+        if (v >= -55) return 'text-emerald-400';
+        if (v >= -70) return 'text-yellow-400';
+        return 'text-orange-400';
+    };
+
+    const cards = details.map(d => {
         const icon = d.is_usb ? '🔌' : '📡';
         const label = d.manufacturer || d.product || d.driver || d.name;
         const bands = (d.bands || []).map(b =>
             `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-700 ${bandColors[b] || 'text-gray-400'}">${b}</span>`
         ).join(' ');
         const nets = d.networks || 0;
+        const c = perIf[d.name];
+        let coverageRow = '';
+        if (c) {
+            const median = c.best_rssi_median;
+            const avg = c.best_rssi_avg;
+            coverageRow = `
+            <div class="w-full flex items-center gap-3 flex-wrap pl-7 pt-1 text-[11px]">
+                <span class="text-gray-400">Only here:</span>
+                <span class="font-bold ${c.only_here > 0 ? 'text-cyan-300' : 'text-gray-500'}">${c.only_here}</span>
+                <span class="text-gray-600">·</span>
+                <span class="text-gray-400">Median RSSI:</span>
+                <span class="font-bold ${rssiColor(median)}">${median != null ? median + ' dBm' : '—'}</span>
+                <span class="text-gray-600">·</span>
+                <span class="text-gray-400">Avg:</span>
+                <span class="font-bold ${rssiColor(avg)}">${avg != null ? avg + ' dBm' : '—'}</span>
+            </div>`;
+        }
         return `<div class="bg-slate-800/40 border border-slate-700 rounded-lg px-4 py-2 flex items-center gap-3 flex-wrap">
             <span class="text-sm">${icon}</span>
             <span class="text-xs font-bold text-cyan-400">${escapeHtml(d.name)}</span>
@@ -14875,9 +14903,34 @@ function _renderWifiAdaptersBar(status) {
             <span class="text-xs text-gray-500">|</span>
             <span class="text-xs text-gray-400">Networks:</span>
             <span class="text-xs font-bold text-emerald-400">${nets}</span>
+            ${coverageRow}
         </div>`;
     }).join('');
-    bar.innerHTML = html;
+
+    // Overlap summary — only meaningful with 2+ scanner interfaces present
+    let summary = '';
+    if (details.length >= 2 && cov.overlap != null) {
+        const ifNames = details.map(d => d.name);
+        const winnerByMedian = ifNames
+            .filter(n => perIf[n] && perIf[n].best_rssi_median)
+            .sort((a, b) => perIf[b].best_rssi_median - perIf[a].best_rssi_median)[0];
+        const winnerByUnique = ifNames
+            .filter(n => perIf[n])
+            .sort((a, b) => perIf[b].unique - perIf[a].unique)[0];
+        const winnerChip = (label, name) => name
+            ? `<span class="text-gray-400">${label}:</span> <span class="font-bold text-cyan-300">${escapeHtml(name)}</span>`
+            : '';
+        summary = `<div class="bg-slate-800/20 border border-slate-700/50 rounded-lg px-4 py-1.5 flex items-center gap-4 flex-wrap text-[11px] mt-1">
+            <span class="text-gray-400">Shared (both saw):</span>
+            <span class="font-bold text-emerald-400">${cov.overlap}</span>
+            <span class="text-gray-600">·</span>
+            ${winnerChip('Best signal', winnerByMedian)}
+            <span class="text-gray-600">·</span>
+            ${winnerChip('Widest coverage', winnerByUnique)}
+        </div>`;
+    }
+
+    bar.innerHTML = cards + summary;
 }
 
 async function saveWardrivingDeviceName(name) {
