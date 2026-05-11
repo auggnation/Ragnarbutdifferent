@@ -1094,6 +1094,7 @@ class WardrivingEngine:
         self.interfaces = []     # WiFi interfaces to use
         self._iface_zero_scans = {}  # consecutive zero-network scans per interface
         self._iface_prepared = set()  # interfaces successfully brought up at least once
+        self._iface_last_error = {}  # most informative scan-failure reason per interface
         self.networks_per_scan = 0
         self.total_networks = 0
         self.scans_completed = 0
@@ -1507,6 +1508,13 @@ class WardrivingEngine:
                         info['networks'] = row[0] if row else 0
                 except Exception:
                     pass
+            # If scans are failing, surface the last kernel error so the UI can
+            # show *why* this adapter is at zero (e.g. EOPNOTSUPP, "Network is
+            # down", "Resource busy"). Empty when scans are succeeding.
+            err = self._iface_last_error.get(iface) if hasattr(self, '_iface_last_error') else None
+            if err and info.get('networks', 0) == 0:
+                info['scan_error'] = err
+            info['current_type'] = self._iface_type(iface)
         except Exception as e:
             logger.debug(f"Interface info error for {iface}: {e}")
         return info
@@ -1949,6 +1957,7 @@ class WardrivingEngine:
         # for stationary wardriving where `scan dump` alone only returns
         # networks on the associated channel + whatever the kernel happened
         # to scan recently.
+        trigger_err = ''
         try:
             freq_args = []
             for f in self._ALL_FREQUENCIES:
@@ -1968,9 +1977,16 @@ class WardrivingEngine:
                 if result.returncode == 0 and result.stdout.strip():
                     networks = self._parse_iw_scan(result.stdout, interface)
                     if networks:
+                        self._iface_last_error.pop(interface, None)
                         return networks
+            else:
+                trigger_err = (trigger.stderr or trigger.stdout or '').strip().splitlines()[-1:] or ['']
+                trigger_err = trigger_err[0][:200]
         except Exception as e:
+            trigger_err = str(e)[:200]
             logger.debug(f"iw full-channel sweep failed on {interface}: {e}")
+        if trigger_err:
+            self._iface_last_error[interface] = trigger_err
 
         # Method 2: iw scan dump (reads cached scan results — fast fallback)
         try:

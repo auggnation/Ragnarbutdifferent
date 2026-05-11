@@ -14895,6 +14895,21 @@ function _renderWifiAdaptersBar(status) {
                 <span class="font-bold ${rssiColor(avg)}">${avg != null ? avg + ' dBm' : '—'}</span>
             </div>`;
         }
+        let diagRow = '';
+        if (nets === 0 && (d.scan_error || (d.current_type && d.current_type !== 'managed'))) {
+            const bits = [];
+            if (d.current_type && d.current_type !== 'managed') {
+                bits.push(`mode=<span class="text-orange-400 font-bold">${escapeHtml(d.current_type)}</span>`);
+            }
+            if (d.scan_error) {
+                bits.push(`<span class="text-red-400">${escapeHtml(d.scan_error)}</span>`);
+            }
+            diagRow = `
+            <div class="w-full flex items-center gap-2 flex-wrap pl-7 pt-1 text-[11px]">
+                <span class="text-gray-400">⚠ Scan failing:</span>
+                ${bits.join(' <span class="text-gray-600">·</span> ')}
+            </div>`;
+        }
         return `<div class="bg-slate-800/40 border border-slate-700 rounded-lg px-4 py-2 flex items-center gap-3 flex-wrap">
             <span class="text-sm">${icon}</span>
             <span class="text-xs font-bold text-cyan-400">${escapeHtml(d.name)}</span>
@@ -14904,6 +14919,7 @@ function _renderWifiAdaptersBar(status) {
             <span class="text-xs text-gray-400">Networks:</span>
             <span class="text-xs font-bold text-emerald-400">${nets}</span>
             ${coverageRow}
+            ${diagRow}
         </div>`;
     }).join('');
 
