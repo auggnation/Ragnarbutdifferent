@@ -4033,6 +4033,51 @@
                             </div>
                         </div>
 
+                        <!-- On-screen Kiosk Card -->
+                        <div class="glass rounded-lg p-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <h4 class="font-medium">On-screen Display</h4>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="kiosk-enabled" class="sr-only peer" onchange="onKioskEnabledToggled(this)">
+                                    <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cyan-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-cyan-600"></div>
+                                </label>
+                            </div>
+                            <div class="text-sm text-gray-400 mb-3">
+                                Show the Ragnar UI fullscreen on an HDMI/DSI display (e.g. Pi Flux). Auto-installs Chromium kiosk + minimal X on Pi OS Lite; idempotent.
+                            </div>
+                            <div id="kiosk-config" class="space-y-2 hidden">
+                                <div>
+                                    <label class="text-xs text-gray-500 block mb-1">Display URL</label>
+                                    <input type="url" id="kiosk-url" value="http://localhost:8000"
+                                           class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
+                                           onchange="onKioskSettingChanged()">
+                                </div>
+                                <div>
+                                    <label class="text-xs text-gray-500 block mb-1">Rotation</label>
+                                    <select id="kiosk-rotation"
+                                            class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
+                                            onchange="onKioskSettingChanged()">
+                                        <option value="0">Landscape (0°)</option>
+                                        <option value="90">Portrait left (90°)</option>
+                                        <option value="180">Inverted (180°)</option>
+                                        <option value="270">Portrait right (270°)</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center justify-between pt-1">
+                                    <label class="text-xs text-gray-500">Hide cursor</label>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" id="kiosk-hide-cursor" class="sr-only peer" onchange="onKioskSettingChanged()">
+                                        <div class="w-9 h-5 bg-gray-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-600"></div>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="flex items-center justify-between mt-3 pt-2 border-t border-gray-700/50">
+                                <span class="text-xs text-gray-500">Service</span>
+                                <span id="kiosk-service-badge" class="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">unknown</span>
+                            </div>
+                            <div id="kiosk-status-message" class="text-xs mt-2 hidden"></div>
+                        </div>
+
                         <!-- Wardriving on Boot Card -->
                         <!-- MOVED to Wardriving section below -->
 
@@ -4744,6 +4789,37 @@
         </div>
         
     </main>
+
+    <!-- Kiosk wardriving live view (rendered only when body.kiosk-mode is set
+         and the URL hash is #wardriving). Sized for 1280x400 Pi Flux landscape. -->
+    <section id="kiosk-wardriving-view" aria-hidden="true">
+        <div class="kiosk-panel">
+            <div class="kiosk-panel-title">Networks (session)</div>
+            <div class="kiosk-bignum" id="kiosk-total-networks">—</div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Scans</span><span class="kiosk-row-value" id="kiosk-scans-completed">0</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">This scan</span><span class="kiosk-row-value" id="kiosk-networks-this-scan">0</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Bluetooth</span><span class="kiosk-row-value" id="kiosk-bt-count">0</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Cell</span><span class="kiosk-row-value" id="kiosk-cell-count">0</span></div>
+        </div>
+        <div class="kiosk-panel">
+            <div class="kiosk-panel-title">GPS</div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Status</span><span class="kiosk-row-value" id="kiosk-gps-fix">offline</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Lat</span><span class="kiosk-row-value" id="kiosk-gps-lat">—</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Lon</span><span class="kiosk-row-value" id="kiosk-gps-lon">—</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Sats</span><span class="kiosk-row-value" id="kiosk-gps-sats">—</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Speed</span><span class="kiosk-row-value" id="kiosk-gps-speed">—</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Port</span><span class="kiosk-row-value" id="kiosk-gps-port">—</span></div>
+        </div>
+        <div class="kiosk-panel">
+            <div class="kiosk-panel-title">Engine</div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Running</span><span class="kiosk-row-value" id="kiosk-wd-running">no</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Interfaces</span><span class="kiosk-row-value" id="kiosk-wd-interfaces">—</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Band</span><span class="kiosk-row-value" id="kiosk-wd-band">—</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Companion</span><span class="kiosk-row-value" id="kiosk-wd-companion">—</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Serial APs</span><span class="kiosk-row-value" id="kiosk-wd-serial-networks">0</span></div>
+            <div class="kiosk-row"><span class="kiosk-row-label">Mesh nodes</span><span class="kiosk-row-value" id="kiosk-wd-mesh">0</span></div>
+        </div>
+    </section>
 
     <!-- Release Gate Modal -->
     <div id="release-gate-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden items-center justify-center z-50">

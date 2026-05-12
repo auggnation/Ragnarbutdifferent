@@ -3708,6 +3708,9 @@ async function loadConfigData() {
         // Load wardriving on-boot toggle state (card is in config page)
         loadWardrivingOnBootState();
 
+        // Load on-screen kiosk state + service badge
+        loadKioskState();
+
         // Update filename label when CSV file is selected
         const wdFileInput = document.getElementById('wd-import-file');
         const wdFileLabel = document.getElementById('wd-import-filename');
@@ -15080,6 +15083,214 @@ async function loadWardrivingOnBootState() {
         const cb = document.getElementById('wardriving-on-boot');
         if (cb) cb.checked = !!data.wardriving_on_boot;
     } catch (e) { /* silent */ }
+}
+
+// ============================================================================
+// ON-SCREEN KIOSK (Pi Flux / HDMI-DSI display)
+// ============================================================================
+
+let _kioskSettingsDebounce = null;
+let _kioskPollTimer = null;
+
+function _setKioskBadge(state) {
+    const badge = document.getElementById('kiosk-service-badge');
+    if (!badge) return;
+    const styles = {
+        active:     'bg-green-900 text-green-300',
+        inactive:   'bg-gray-700 text-gray-300',
+        activating: 'bg-amber-900 text-amber-300',
+        deactivating: 'bg-amber-900 text-amber-300',
+        failed:     'bg-red-900 text-red-300',
+        not_installed: 'bg-gray-700 text-gray-400',
+        unknown:    'bg-gray-700 text-gray-400',
+    };
+    badge.textContent = state || 'unknown';
+    badge.className = 'text-xs px-2 py-0.5 rounded ' + (styles[state] || styles.unknown);
+}
+
+function _setKioskMessage(text, kind) {
+    const el = document.getElementById('kiosk-status-message');
+    if (!el) return;
+    if (!text) { el.classList.add('hidden'); el.textContent = ''; return; }
+    const tone = kind === 'error' ? 'text-red-400' : (kind === 'success' ? 'text-green-400' : 'text-amber-300');
+    el.className = 'text-xs mt-2 ' + tone;
+    el.textContent = text;
+    el.classList.remove('hidden');
+}
+
+async function loadKioskState() {
+    try {
+        const data = await fetchAPI('/api/kiosk/status');
+        const enabledCb = document.getElementById('kiosk-enabled');
+        const url = document.getElementById('kiosk-url');
+        const rot = document.getElementById('kiosk-rotation');
+        const cur = document.getElementById('kiosk-hide-cursor');
+        const cfgPanel = document.getElementById('kiosk-config');
+        if (enabledCb) enabledCb.checked = !!data.enabled;
+        if (url && data.url) url.value = data.url;
+        if (rot) rot.value = String(data.rotation ?? 0);
+        if (cur) cur.checked = !!data.hide_cursor;
+        if (cfgPanel) cfgPanel.classList.toggle('hidden', !data.enabled);
+        _setKioskBadge(data.service_state || 'unknown');
+    } catch (e) {
+        _setKioskBadge('unknown');
+    }
+}
+
+async function onKioskEnabledToggled(cb) {
+    const enabled = !!cb.checked;
+    const cfgPanel = document.getElementById('kiosk-config');
+    if (cfgPanel) cfgPanel.classList.toggle('hidden', !enabled);
+    _setKioskMessage(enabled ? 'Installing kiosk and starting service…' : 'Stopping kiosk service…', 'info');
+    _setKioskBadge(enabled ? 'activating' : 'deactivating');
+    try {
+        const res = await fetch('/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({kiosk_enabled: enabled})
+        });
+        const data = await res.json();
+        if (!data.success) {
+            cb.checked = !enabled;
+            if (cfgPanel) cfgPanel.classList.toggle('hidden', enabled);
+            _setKioskMessage(data.error || 'Failed to update kiosk setting', 'error');
+            return;
+        }
+        _pollKioskStatusUntilStable(enabled ? 'active' : 'inactive');
+    } catch (e) {
+        cb.checked = !enabled;
+        if (cfgPanel) cfgPanel.classList.toggle('hidden', enabled);
+        _setKioskMessage('Network error toggling kiosk: ' + e.message, 'error');
+    }
+}
+
+function onKioskSettingChanged() {
+    if (_kioskSettingsDebounce) clearTimeout(_kioskSettingsDebounce);
+    _kioskSettingsDebounce = setTimeout(async () => {
+        const url = document.getElementById('kiosk-url');
+        const rot = document.getElementById('kiosk-rotation');
+        const cur = document.getElementById('kiosk-hide-cursor');
+        const payload = {
+            kiosk_url: url ? url.value : 'http://localhost:8000',
+            kiosk_rotation: rot ? parseInt(rot.value, 10) || 0 : 0,
+            kiosk_hide_cursor: cur ? !!cur.checked : true,
+        };
+        try {
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (data.success) {
+                _setKioskMessage('Settings saved — restarting kiosk service…', 'info');
+                _setKioskBadge('activating');
+                _pollKioskStatusUntilStable('active');
+            } else {
+                _setKioskMessage(data.error || 'Failed to save kiosk settings', 'error');
+            }
+        } catch (e) {
+            _setKioskMessage('Network error: ' + e.message, 'error');
+        }
+    }, 500);
+}
+
+function _pollKioskStatusUntilStable(targetState, maxAttempts = 12) {
+    if (_kioskPollTimer) clearTimeout(_kioskPollTimer);
+    let attempts = 0;
+    const tick = async () => {
+        attempts++;
+        try {
+            const data = await fetchAPI('/api/kiosk/status');
+            _setKioskBadge(data.service_state || 'unknown');
+            if (data.service_state === targetState || data.service_state === 'failed') {
+                _setKioskMessage(
+                    data.service_state === 'failed'
+                        ? 'Kiosk service failed to start. Check `journalctl -u ragnar-kiosk`.'
+                        : (targetState === 'active' ? 'Kiosk is running.' : 'Kiosk stopped.'),
+                    data.service_state === 'failed' ? 'error' : 'success'
+                );
+                setTimeout(() => _setKioskMessage('', null), 4000);
+                return;
+            }
+        } catch (e) { /* keep polling */ }
+        if (attempts < maxAttempts) {
+            _kioskPollTimer = setTimeout(tick, 2000);
+        } else {
+            _setKioskMessage('Kiosk service state did not stabilize. Check journalctl.', 'error');
+        }
+    };
+    _kioskPollTimer = setTimeout(tick, 1500);
+}
+
+// Kiosk-mode bootstrap: when the page is loaded with ?kiosk=1 (the chromium
+// kiosk launches this way), add the body class so CSS can swap to the
+// big-display layout. If the URL hash is #wardriving, start polling the
+// wardriving live view.
+(function initKioskModeBootstrap() {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('kiosk') !== '1') return;
+        const applyClass = () => document.body && document.body.classList.add('kiosk-mode');
+        if (document.body) {
+            applyClass();
+        } else {
+            document.addEventListener('DOMContentLoaded', applyClass, { once: true });
+        }
+        if (window.location.hash === '#wardriving') {
+            window.addEventListener('load', () => {
+                _refreshKioskWardrivingView();
+                setInterval(_refreshKioskWardrivingView, 2000);
+            }, { once: true });
+        }
+    } catch (e) { /* no-op */ }
+})();
+
+function _fmtCoord(v, suffixes) {
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    const abs = Math.abs(v);
+    const dir = v >= 0 ? suffixes[0] : suffixes[1];
+    return abs.toFixed(5) + '° ' + dir;
+}
+
+async function _refreshKioskWardrivingView() {
+    try {
+        const status = await fetch('/api/wardriving/status').then(r => r.json()).catch(() => ({}));
+        const setText = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = (val === undefined || val === null || val === '') ? '—' : String(val);
+        };
+        setText('kiosk-total-networks', status.total_networks ?? 0);
+        setText('kiosk-scans-completed', status.scans_completed ?? 0);
+        setText('kiosk-networks-this-scan', status.networks_this_scan ?? 0);
+        setText('kiosk-bt-count', status.bluetooth_count ?? 0);
+        setText('kiosk-cell-count', status.cell_count ?? 0);
+        setText('kiosk-wd-running', status.running ? 'yes' : 'no');
+        setText('kiosk-wd-interfaces', Array.isArray(status.interfaces) ? status.interfaces.join(', ') : '—');
+        setText('kiosk-wd-band', status.band_mode || '—');
+        setText('kiosk-wd-companion', status.companion_name || '—');
+        setText('kiosk-wd-serial-networks', status.serial_networks ?? 0);
+        setText('kiosk-wd-mesh', status.mesh_node_count ?? 0);
+
+        const gps = status.gps || {};
+        const fixEl = document.getElementById('kiosk-gps-fix');
+        if (fixEl) {
+            let label;
+            if (!gps.connected) label = 'offline';
+            else if (gps.has_fix) label = 'fix';
+            else label = 'no fix';
+            fixEl.textContent = label;
+            fixEl.className = 'kiosk-row-value ' + (gps.has_fix ? 'kiosk-gps-fix-ok' : 'kiosk-gps-fix-none');
+        }
+        setText('kiosk-gps-lat', _fmtCoord(gps.latitude, ['N', 'S']));
+        setText('kiosk-gps-lon', _fmtCoord(gps.longitude, ['E', 'W']));
+        setText('kiosk-gps-sats', gps.satellites ?? '—');
+        const speed = gps.speed_kmh;
+        setText('kiosk-gps-speed', (typeof speed === 'number') ? speed.toFixed(1) + ' km/h' : '—');
+        setText('kiosk-gps-port', gps.port || '—');
+    } catch (e) {
+        /* network blip — keep last values */
+    }
 }
 
 async function importWigleCsv() {

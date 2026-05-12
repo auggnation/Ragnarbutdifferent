@@ -102,6 +102,13 @@ def check_authentication():
     if any(path.startswith(p) for p in static_prefixes):
         return
 
+    # Kiosk loopback bypass: any request originating from the Pi itself
+    # (the on-screen kiosk runs chromium pointed at localhost) bypasses auth.
+    # Anyone with local access already has shell on the device, so this
+    # adds no attack surface vs. the existing network-facing auth.
+    if request.remote_addr in ('127.0.0.1', '::1') and shared_data.config.get('kiosk_enabled'):
+        return
+
     # Check if user is authenticated via Flask session
     if not session.get('authenticated'):
         if path.startswith('/api/'):
@@ -984,6 +991,50 @@ def _stop_service(service_name: str) -> tuple[bool, str]:
         logger.warning(detail)
         return False, detail
     return True, 'stopped'
+
+
+KIOSK_SERVICE = 'ragnar-kiosk.service'
+KIOSK_INSTALL_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scripts', 'install_kiosk.sh')
+KIOSK_UNINSTALL_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scripts', 'uninstall_kiosk.sh')
+
+
+def _kiosk_installed() -> bool:
+    """True if the systemd unit file is present."""
+    return os.path.exists('/etc/systemd/system/ragnar-kiosk.service')
+
+
+def _dispatch_kiosk_change(prev_enabled: bool, new_enabled: bool, settings_changed: bool) -> None:
+    """Background worker: install/start/stop/restart the kiosk service to match config."""
+    try:
+        if new_enabled and not prev_enabled:
+            if not _kiosk_installed():
+                logger.info(f"[kiosk] running installer: {KIOSK_INSTALL_SCRIPT}")
+                proc = subprocess.run(
+                    ['sudo', 'bash', KIOSK_INSTALL_SCRIPT],
+                    capture_output=True, text=True, timeout=600, check=False
+                )
+                if proc.returncode != 0:
+                    logger.error(f"[kiosk] install failed (rc={proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}")
+                    return
+                logger.info("[kiosk] install completed")
+            enable_proc = _run_systemctl(['enable', '--now', KIOSK_SERVICE])
+            if enable_proc.returncode != 0:
+                logger.error(f"[kiosk] enable --now failed: {enable_proc.stderr.strip() or enable_proc.stdout.strip()}")
+            else:
+                logger.info("[kiosk] service enabled and started")
+        elif prev_enabled and not new_enabled:
+            _run_systemctl(['disable', '--now', KIOSK_SERVICE])
+            logger.info("[kiosk] service disabled and stopped")
+        elif new_enabled and settings_changed:
+            restart_proc = _run_systemctl(['restart', KIOSK_SERVICE])
+            if restart_proc.returncode != 0:
+                logger.warning(f"[kiosk] restart failed: {restart_proc.stderr.strip() or restart_proc.stdout.strip()}")
+            else:
+                logger.info("[kiosk] service restarted to pick up new settings")
+    except subprocess.TimeoutExpired:
+        logger.error("[kiosk] dispatch timed out")
+    except Exception as exc:
+        logger.error(f"[kiosk] dispatch error: {exc}")
 
 
 def _deferred_self_stop(delay: int = 1) -> None:
@@ -3033,6 +3084,14 @@ def update_config():
         ai_reload_error = None
         epd_type_changed = 'epd_type' in data
 
+        # Capture pre-update kiosk state so we can detect toggles after save.
+        prev_kiosk_enabled = bool(shared_data.config.get('kiosk_enabled', False))
+        kiosk_settings_keys = {'kiosk_url', 'kiosk_rotation', 'kiosk_hide_cursor'}
+        kiosk_settings_changed = any(
+            k in data and data[k] != shared_data.config.get(k)
+            for k in kiosk_settings_keys
+        )
+
         # Resolve size keys (from web UI) to actual driver names
         if epd_type_changed:
             from shared import resolve_epd_type
@@ -3068,6 +3127,16 @@ def update_config():
                     logger.info("pyserial installed successfully")
                 except Exception as pip_err:
                     logger.warning(f"Failed to install pyserial: {pip_err}")
+
+        # Kiosk dispatch: install/start when newly enabled, stop when disabled,
+        # restart when its display settings (url/rotation/cursor) changed.
+        if 'kiosk_enabled' in data or kiosk_settings_changed:
+            new_kiosk_enabled = bool(shared_data.config.get('kiosk_enabled', False))
+            threading.Thread(
+                target=_dispatch_kiosk_change,
+                args=(prev_kiosk_enabled, new_kiosk_enabled, kiosk_settings_changed),
+                daemon=True
+            ).start()
 
         # Reflect orientation changes immediately for both hardware and screenshots
         from shared import normalize_rotation
@@ -3128,6 +3197,24 @@ def update_config():
     except Exception as e:
         logger.error(f"Error updating config: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/kiosk/status', methods=['GET'])
+def kiosk_status():
+    """Report the on-screen kiosk service state for the Settings UI."""
+    try:
+        state = _systemctl_state_label('ragnar-kiosk') if _kiosk_installed() else 'not_installed'
+        return jsonify({
+            'installed': _kiosk_installed(),
+            'enabled': bool(shared_data.config.get('kiosk_enabled', False)),
+            'service_state': state,
+            'url': shared_data.config.get('kiosk_url', 'http://localhost:8000'),
+            'rotation': shared_data.config.get('kiosk_rotation', 0),
+            'hide_cursor': bool(shared_data.config.get('kiosk_hide_cursor', True)),
+        })
+    except Exception as exc:
+        logger.error(f"Error getting kiosk status: {exc}")
+        return jsonify({'error': str(exc)}), 500
 
 
 @app.route('/api/config/scan-subnets', methods=['GET', 'POST', 'DELETE'])

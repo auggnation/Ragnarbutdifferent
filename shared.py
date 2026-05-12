@@ -744,7 +744,13 @@ class SharedData:
             "wardriving_interfaces": [],
             "wardriving_auto_export": True,
             "wardriving_device_name": "",
-            "wardriving_on_boot": False
+            "wardriving_on_boot": False,
+
+            "__title_kiosk__": "On-screen Display (Kiosk)",
+            "kiosk_enabled": False,
+            "kiosk_url": "http://localhost:8000",
+            "kiosk_rotation": 0,
+            "kiosk_hide_cursor": True
         }
 
     def apply_display_profile(self, epd_type=None, set_orientation_if_missing=False, persist=False):
