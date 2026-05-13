@@ -1366,6 +1366,24 @@ class Display:
             stats_bottom.append(("Sats", str(gps.get('satellites', '-'))))
             stats_bottom.append(("Speed", spd_str))
 
+        # Companion (Piglet / Huginn) — show name + what it has streamed in.
+        # Falls back to "Companion" if firmware banner wasn't detected; still
+        # render it so the user can see the engine has *something* on serial.
+        companion = (wd.get('companion_name') or '').strip()
+        if wd.get('serial_connected') and companion:
+            stats_bottom.append(("Companion", companion))
+            cached = wd.get('serial_networks', 0)
+            if cached:
+                stats_bottom.append(("Cached", f"{cached} nets"))
+            if companion == 'Piglet':
+                nodes = wd.get('mesh_node_count', 0)
+                if nodes:
+                    stats_bottom.append(("Mesh Nodes", str(nodes)))
+            elif companion == 'Huginn':
+                ble = wd.get('esp_ble_count', 0)
+                if ble:
+                    stats_bottom.append(("BLE Devs", str(ble)))
+
         # Render: top rows (right-aligned key/value), then adapter rows
         # (left-aligned single line so the long value survives), then bottom rows.
         y = self._draw_stat_rows(draw, y, stats_top)
