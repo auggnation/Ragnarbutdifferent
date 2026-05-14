@@ -1298,15 +1298,16 @@ class Display:
         st = wd.get('stats', {})
         gps = wd.get('gps', {})
 
-        # WiFi connection status line (same as regular Ragnar EPD)
+        # WiFi connection status line (same as regular Ragnar EPD).
+        # Only shown when actually connected — "Connected WiFi" is the renamed
+        # row and is treated as a non-static field per the e-paper spec.
         wifi_connected = self.is_wifi_connected()
+        wifi_str = None
         if wifi_connected:
             ip_octet = self.get_wifi_ip_last_octet() or ""
             wifi_str = f"* {ip_octet}" if ip_octet else "*"
-        else:
-            wifi_str = "No WiFi"
 
-        # GPS status line
+        # GPS status line — GPS row is static, always rendered.
         if gps.get('has_fix'):
             gps_str = f"{gps.get('latitude', 0):.4f},{gps.get('longitude', 0):.4f}"
         elif gps.get('connected'):
@@ -1314,14 +1315,19 @@ class Display:
         else:
             gps_str = "No GPS"
 
-        stats_top = [
-            ("WiFi", wifi_str),
+        # Static rows are always rendered: Networks, Open/WEP, 2.4 GHz, 5 GHz.
+        # "Connected WiFi" and 6 GHz are only added when they have a value.
+        stats_top = []
+        if wifi_str is not None:
+            stats_top.append(("Connected WiFi", wifi_str))
+        stats_top.extend([
             ("Networks", str(st.get('total_networks', 0))),
             ("Open/WEP", f"{st.get('open_networks', 0)}/{st.get('wep_networks', 0)}"),
             ("2.4 GHz", str(st.get('band_2_4ghz', 0))),
             ("5 GHz", str(st.get('band_5ghz', 0))),
-            ("6 GHz", str(st.get('band_6ghz', 0))),
-        ]
+        ])
+        if st.get('band_6ghz', 0) > 0:
+            stats_top.append(("6 GHz", str(st.get('band_6ghz', 0))))
 
         # Per-adapter rows. Format requested:
         #   wlan0    19 Networks, M RSSI: -63 dBm [2.4]
@@ -1354,35 +1360,44 @@ class Display:
                     val += f" [{'/'.join(sweep)}]"
             adapter_rows.append((name, val))
 
+        # Static rows: Bluetooth and GPS are always rendered.
+        # Cell and Cameras are only shown when > 0.
         stats_bottom = [
             ("Bluetooth", str(st.get('bluetooth_devices', 0))),
-            ("Cell", str(st.get('cell_towers', 0))),
-            ("Cameras", str(st.get('cameras', 0))),
-            ("GPS", gps_str),
         ]
-        if gps.get('has_fix'):
-            spd = gps.get('speed_kmh')
-            spd_str = f"{spd:.1f}km/h" if spd is not None else "-"
-            stats_bottom.append(("Sats", str(gps.get('satellites', '-'))))
-            stats_bottom.append(("Speed", spd_str))
+        if st.get('cell_towers', 0) > 0:
+            stats_bottom.append(("Cell", str(st.get('cell_towers', 0))))
+        if st.get('cameras', 0) > 0:
+            stats_bottom.append(("Cameras", str(st.get('cameras', 0))))
+        stats_bottom.append(("GPS", gps_str))
 
-        # Companion (Piglet / Huginn) — show name + what it has streamed in.
-        # Falls back to "Companion" if firmware banner wasn't detected; still
-        # render it so the user can see the engine has *something* on serial.
+        # Sats / Speed only shown when GPS has a fix.
+        if gps.get('has_fix'):
+            sats = gps.get('satellites')
+            if isinstance(sats, (int, float)) and sats > 0:
+                stats_bottom.append(("Sats", str(sats)))
+            spd = gps.get('speed_kmh')
+            if spd is not None and spd > 0:
+                stats_bottom.append(("Speed", f"{spd:.1f}km/h"))
+
+        # Companion (Piglet / Huginn) — STATIC row, always rendered so the user
+        # can tell at a glance whether a companion firmware is attached.
         companion = (wd.get('companion_name') or '').strip()
         if wd.get('serial_connected') and companion:
             stats_bottom.append(("Companion", companion))
             cached = wd.get('serial_networks', 0)
-            if cached:
+            if cached > 0:
                 stats_bottom.append(("Cached", f"{cached} nets"))
             if companion == 'Piglet':
                 nodes = wd.get('mesh_node_count', 0)
-                if nodes:
+                if nodes > 0:
                     stats_bottom.append(("Mesh Nodes", str(nodes)))
             elif companion == 'Huginn':
                 ble = wd.get('esp_ble_count', 0)
-                if ble:
+                if ble > 0:
                     stats_bottom.append(("BLE Devs", str(ble)))
+        else:
+            stats_bottom.append(("Companion", "None"))
 
         # Render: top rows (right-aligned key/value), then adapter rows
         # (left-aligned single line so the long value survives), then bottom rows.
