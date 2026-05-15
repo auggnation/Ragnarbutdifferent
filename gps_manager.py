@@ -1,12 +1,13 @@
 # gps_manager.py
-# USB GPS module support for Ragnar wardriving.
-# Supports any NMEA-compatible USB GPS (u-blox, BN-220, VK-162, etc.)
-# Reads NMEA sentences from serial port and provides lat/lon/alt/speed/fix data.
+# GPS module support for Ragnar wardriving.
+# Supports gpsd (preferred) and direct NMEA serial for USB/native serial GPS receivers.
 
 import os
 import re
 import time
 import glob
+import json
+import socket
 import threading
 import logging
 
@@ -100,19 +101,38 @@ def _probe_nmea(dev, timeout_per_baud=1.5):
     return False
 
 
-def detect_gps_device(exclude_ports=None):
-    """Auto-detect a USB GPS serial device.
+def _try_gpsd(host='127.0.0.1', port=2947, timeout=2):
+    """Return an open gpsd socket if gpsd is running and responsive, else None."""
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((host, port))
+        sock.sendall(b'?WATCH={"enable":true,"json":true}\n')
+        data = sock.recv(2048).decode('utf-8', errors='ignore')
+        if '"class"' in data:
+            sock.settimeout(None)
+            return sock
+    except Exception:
+        pass
+    if sock:
+        try:
+            sock.close()
+        except Exception:
+            pass
+    return None
 
-    Detection has three stages, in order of confidence:
+
+def detect_gps_device(exclude_ports=None):
+    """Auto-detect a GPS source.
+
+    Detection has four stages, in order of confidence:
+      0. gpsd socket — returns the sentinel string 'gpsd' if gpsd is running.
+         This avoids port conflicts when gpsd already owns the serial device.
       1. by-id symlinks containing GPS keywords (gps, u-blox, nmea, gnss, …).
       2. by-id symlinks NOT containing known-ESP32 markers — probe for NMEA.
-      3. raw /dev/ttyACM* and /dev/ttyUSB* — probe for NMEA at multiple bauds.
-
-    Earlier versions blanket-excluded any device with `cp210` in the by-id
-    name, but that mis-rejected GPS modules sitting on CP210x USB-UART
-    bridges. We now only exclude ports whose udev info actually identifies
-    them as Espressif, matching what `_port_is_espressif` checks for ESP32
-    detection elsewhere in the system.
+      3. raw ttyACM/ttyUSB/ttyS/ttyAMA — probe for NMEA at multiple bauds.
+         Covers native UART ports (e.g. Raspberry Pi /dev/ttyAMA0, /dev/serial0).
 
     Args:
         exclude_ports: ports to skip outright (e.g. an ESP32 port already
@@ -123,6 +143,14 @@ def detect_gps_device(exclude_ports=None):
 
     def _resolve(entry):
         return os.path.realpath(os.path.join(by_id, entry))
+
+    # Stage 0: gpsd socket. If gpsd is running it already owns the serial port,
+    # so trying to open that port directly would fail. Defer to gpsd instead.
+    sock = _try_gpsd()
+    if sock:
+        sock.close()
+        logger.debug("gpsd detected — using gpsd socket")
+        return 'gpsd'
 
     # Build the exclude set first so by-id keyword matches don't accidentally
     # return an Espressif device that just happens to have "gnss" in its
@@ -153,26 +181,36 @@ def detect_gps_device(exclude_ports=None):
             if _probe_nmea(path):
                 return path
 
-    # Stage 3: raw ttyACM/ttyUSB — last resort for devices that don't expose
-    # a by-id symlink at all (rare but possible with udev quirks).
-    for pattern in ('/dev/ttyACM*', '/dev/ttyUSB*'):
-        for dev in sorted(glob.glob(pattern)):
-            if dev in exclude:
-                continue
-            if _probe_nmea(dev):
-                return dev
+    # Stage 3: raw device nodes — covers USB serial, native UART, and Raspberry
+    # Pi serial ports (/dev/ttyAMA0, /dev/serial0) that have no by-id symlink.
+    candidates = []
+    for pattern in ('/dev/ttyACM*', '/dev/ttyUSB*', '/dev/ttyS[0-9]*', '/dev/ttyAMA*'):
+        candidates.extend(glob.glob(pattern))
+    for fixed in ('/dev/serial0', '/dev/serial1'):
+        if os.path.exists(fixed):
+            candidates.append(fixed)
+    seen = set()
+    for dev in sorted(candidates):
+        real = os.path.realpath(dev)
+        if dev in exclude or real in exclude or real in seen:
+            continue
+        seen.add(real)
+        if _probe_nmea(dev):
+            return dev
 
     return None
 
 
 class GPSManager:
-    """Manages a USB GPS module, providing real-time position data."""
+    """Manages a GPS source (gpsd socket or direct NMEA serial), providing real-time position data."""
 
     def __init__(self, port=None, baudrate=9600, exclude_ports=None):
         self.port = port
         self.baudrate = baudrate
         self._exclude_ports = set(exclude_ports or [])
         self._serial = None
+        self._gpsd_sock = None
+        self._use_gpsd = False
         self._running = False
         self._thread = None
         self._lock = threading.Lock()
@@ -202,6 +240,27 @@ class GPSManager:
             logger.warning(self.error)
             return False
 
+        if self.port == 'gpsd':
+            return self._start_gpsd()
+        return self._start_serial()
+
+    def _start_gpsd(self):
+        sock = _try_gpsd()
+        if not sock:
+            self.error = "gpsd not reachable on localhost:2947"
+            logger.error(self.error)
+            return False
+        self._gpsd_sock = sock
+        self._use_gpsd = True
+        self._running = True
+        self.connected = True
+        self.error = None
+        self._thread = threading.Thread(target=self._read_loop_gpsd, daemon=True, name="gps-reader")
+        self._thread.start()
+        logger.info("GPS started via gpsd")
+        return True
+
+    def _start_serial(self):
         try:
             import serial as pyserial
             self._serial = pyserial.Serial(self.port, self.baudrate, timeout=1)
@@ -231,6 +290,12 @@ class GPSManager:
             except Exception:
                 pass
             self._serial = None
+        if self._gpsd_sock:
+            try:
+                self._gpsd_sock.close()
+            except Exception:
+                pass
+            self._gpsd_sock = None
         logger.info("GPS stopped")
 
     def has_fix(self):
@@ -264,6 +329,7 @@ class GPSManager:
         with self._lock:
             return {
                 'connected': self.connected,
+                'source': 'gpsd' if self._use_gpsd else 'serial',
                 'port': self.port,
                 'has_fix': self.has_fix(),
                 'fix_quality': self.fix_quality,
@@ -277,6 +343,91 @@ class GPSManager:
                 'last_update': self.last_update,
                 'error': self.error
             }
+
+    def _read_loop_gpsd(self):
+        """Background thread: read JSON objects from gpsd and parse position."""
+        buf = ''
+        while self._running:
+            try:
+                if not self._gpsd_sock:
+                    self._reconnect_gpsd()
+                    continue
+                chunk = self._gpsd_sock.recv(4096).decode('utf-8', errors='ignore')
+                if not chunk:
+                    raise ConnectionError("gpsd closed connection")
+                buf += chunk
+                while '\n' in buf:
+                    line, buf = buf.split('\n', 1)
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    cls = obj.get('class')
+                    if cls == 'TPV':
+                        self._parse_tpv(obj)
+                    elif cls == 'SKY':
+                        self._parse_sky(obj)
+            except Exception as e:
+                if self._running:
+                    logger.debug(f"gpsd read error: {e}")
+                    if self._gpsd_sock:
+                        try:
+                            self._gpsd_sock.close()
+                        except Exception:
+                            pass
+                        self._gpsd_sock = None
+                    with self._lock:
+                        self.connected = False
+                    self._reconnect_gpsd()
+
+    def _reconnect_gpsd(self):
+        """Attempt to reconnect to gpsd."""
+        time.sleep(3)
+        if not self._running:
+            return
+        sock = _try_gpsd()
+        if sock:
+            self._gpsd_sock = sock
+            with self._lock:
+                self.connected = True
+                self.error = None
+            logger.info("GPS reconnected via gpsd")
+        else:
+            with self._lock:
+                self.error = "gpsd not reachable"
+            time.sleep(5)
+
+    def _parse_tpv(self, obj):
+        """Parse a gpsd TPV (Time-Position-Velocity) object."""
+        mode = obj.get('mode', 0)  # 1=no fix, 2=2D, 3=3D
+        status = obj.get('status', 1)  # 1=normal GPS, 2=DGPS
+        with self._lock:
+            if mode >= 2 and 'lat' in obj and 'lon' in obj:
+                self.latitude = obj['lat']
+                self.longitude = obj['lon']
+                self.altitude = obj.get('alt')
+                speed_ms = obj.get('speed')
+                self.speed_kmh = round(speed_ms * 3.6, 1) if speed_ms is not None else None
+                self.course = obj.get('track')
+                self.fix_quality = 2 if status == 2 else 1
+                self.hdop = obj.get('hdop') or self.hdop
+                self.last_update = time.time()
+            else:
+                self.fix_quality = 0
+
+    def _parse_sky(self, obj):
+        """Parse a gpsd SKY object for satellite count and HDOP."""
+        with self._lock:
+            sats = obj.get('satellites') or []
+            used = sum(1 for s in sats if s.get('used', False))
+            if used or sats:
+                self.satellites = used
+            hdop = obj.get('hdop')
+            if hdop is not None:
+                self.hdop = hdop
 
     def _read_loop(self):
         """Background thread: read NMEA sentences and parse position."""
