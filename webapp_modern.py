@@ -6383,10 +6383,10 @@ def _get_power_health():
             message = f"Pi is undervolted right now ({ext5v:.2f} V at input)" if ext5v else "Pi is undervolted right now"
         else:
             message = "Pi is currently throttling"
-    elif ext5v is not None and ext5v < 4.85:
+    elif ext5v is not None and ext5v < 4.70:
         status = 'critical'
-        message = f"Input voltage low ({ext5v:.2f} V) — USB devices may fail to enumerate"
-    elif ext5v is not None and ext5v < 4.95:
+        message = f"Input voltage low ({ext5v:.2f} V) — close to undervoltage trip, USB devices may fail to enumerate"
+    elif ext5v is not None and ext5v < 4.80:
         status = 'warning'
         message = f"Input voltage marginal ({ext5v:.2f} V) — consider a higher-output USB-PD powerbank"
     elif ever_undervolted or ever_throttled:
