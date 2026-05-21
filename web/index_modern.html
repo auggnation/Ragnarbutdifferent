@@ -4084,6 +4084,30 @@
                     </div>
                 </div>
 
+                <!-- Network Scanning Section -->
+                <div id="network-scanning-config-section" class="mb-8">
+                    <h3 class="text-xl font-semibold mb-4 text-Ragnar-400">Network Scanning</h3>
+                    <div class="glass rounded-lg p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <h4 class="font-medium">Scan Intensity</h4>
+                            <span id="scan-intensity-current" class="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-300">loading…</span>
+                        </div>
+                        <p class="text-xs text-gray-500 mb-3">
+                            Controls nmap timing, port count and whether the default gateway is scanned.
+                            Some routers (especially ISP combo boxes) get knocked offline by aggressive scans.
+                            If turning Ragnar on crashes your home WiFi, drop this to <em>Medium</em> or <em>Light</em>.
+                        </p>
+                        <select id="scan-intensity-select"
+                                onchange="onScanIntensityChanged(this)"
+                                class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200">
+                            <option value="light">Light — please be gentle (-T2, top 100, skip gateway)</option>
+                            <option value="medium">Medium — just be normal (-T3, top 1000, skip gateway)</option>
+                            <option value="high">High — Full Viking Rage (-T4, top 3000, scan gateway)</option>
+                        </select>
+                        <p id="scan-intensity-status" class="text-xs mt-2 hidden"></p>
+                    </div>
+                </div>
+
                 <!-- Wardriving Section -->
                 <div id="wardriving-config-section" class="mb-8">
                     <h3 class="text-xl font-semibold mb-4 text-Ragnar-400">Wardriving</h3>

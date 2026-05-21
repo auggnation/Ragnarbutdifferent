@@ -3335,6 +3335,55 @@ def kiosk_status():
         return jsonify({'error': str(exc)}), 500
 
 
+@app.route('/api/config/scan-intensity', methods=['GET', 'POST'])
+def manage_scan_intensity():
+    """Get or set the scan intensity profile.
+
+    GET:  Returns {"current": "high", "profiles": {...}}.
+    POST: Body {"intensity": "light"|"medium"|"high"}.
+    """
+    try:
+        from actions.scanning import SCAN_PROFILES, get_default_gateway_ip
+    except Exception as import_error:
+        return jsonify({'error': f'scan profiles unavailable: {import_error}'}), 500
+
+    try:
+        if request.method == 'GET':
+            current = (shared_data.config.get('scan_intensity') or 'high').strip().lower()
+            if current not in SCAN_PROFILES:
+                current = 'high'
+            return jsonify({
+                'current': current,
+                'gateway': get_default_gateway_ip(),
+                'profiles': {
+                    name: {
+                        'label': p['label'],
+                        'timing': p['timing'],
+                        'min_rate': p['min_rate'],
+                        'top_ports': p['top_ports'],
+                        'skip_gateway': p['skip_gateway'],
+                    } for name, p in SCAN_PROFILES.items()
+                },
+            })
+
+        data = request.get_json() or {}
+        raw = str(data.get('intensity', '')).strip().lower()
+        if raw not in SCAN_PROFILES:
+            return jsonify({
+                'error': f"Invalid intensity '{raw}'. Must be one of: {', '.join(SCAN_PROFILES.keys())}"
+            }), 400
+
+        shared_data.config['scan_intensity'] = raw
+        shared_data.scan_intensity = raw
+        shared_data.save_config()
+        socketio.emit('config_updated', shared_data.config)
+        return jsonify({'success': True, 'current': raw, 'label': SCAN_PROFILES[raw]['label']})
+
+    except Exception as e:
+        logger.error(f"Error managing scan intensity: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/config/scan-subnets', methods=['GET', 'POST', 'DELETE'])
 def manage_scan_subnets():
     """Manage the list of extra subnets to scan.

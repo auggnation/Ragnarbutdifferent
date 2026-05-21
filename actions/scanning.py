@@ -75,6 +75,54 @@ b_port = None
 b_parent = None
 b_priority = 1
 
+# Scan intensity profiles. Default is "high" so existing installs keep current
+# behavior on update; users opt into quieter modes via the Config tab.
+SCAN_PROFILES = {
+    "light": {
+        "label": "Light — please be gentle",
+        "timing": "-T2",
+        "min_rate": 50,
+        "top_ports": 100,
+        "skip_gateway": True,
+    },
+    "medium": {
+        "label": "Medium — just be normal",
+        "timing": "-T3",
+        "min_rate": 200,
+        "top_ports": 1000,
+        "skip_gateway": True,
+    },
+    "high": {
+        "label": "High — Full Viking Rage",
+        "timing": "-T4",
+        "min_rate": 1000,
+        "top_ports": 3000,
+        "skip_gateway": False,
+    },
+}
+
+
+def get_scan_profile(shared_data):
+    """Resolve the active scan profile from config, defaulting to 'high'."""
+    name = (shared_data.config.get('scan_intensity') or 'high').strip().lower()
+    return SCAN_PROFILES.get(name, SCAN_PROFILES['high'])
+
+
+def get_default_gateway_ip():
+    """Return the IPv4 default gateway, or None if not detectable."""
+    try:
+        result = subprocess.run(
+            ['ip', 'route', 'show', 'default'],
+            capture_output=True, text=True, timeout=3
+        )
+        for line in result.stdout.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[0] == 'default' and parts[1] == 'via':
+                return parts[2]
+    except Exception:
+        return None
+    return None
+
 class NetworkScanner:
     """
     This class handles the entire network scanning process.
@@ -274,10 +322,20 @@ class NetworkScanner:
                 ordered_ports.append(port)
         
         port_list = ','.join(map(str, ordered_ports))
-        
 
-        nmap_args = f"-Pn -sS -p{port_list} --open --min-rate 1000 --max-retries 1 --host-timeout 10s -v"
-        
+        profile = get_scan_profile(self.shared_data)
+        exclude_arg = ""
+        if profile["skip_gateway"]:
+            gw = get_default_gateway_ip()
+            if gw:
+                exclude_arg = f" --exclude {gw}"
+                self.logger.info(f"🛡️  Scan profile '{profile['label']}': excluding gateway {gw}")
+        nmap_args = (
+            f"-Pn -sS -p{port_list} --open "
+            f"{profile['timing']} --min-rate {profile['min_rate']} "
+            f"--max-retries 1 --host-timeout 10s -v{exclude_arg}"
+        )
+
         nmap_command = f"nmap {nmap_args} {network_cidr}"
         self.logger.info(f"🔍 Executing: {nmap_command}")
         self.logger.info(f"   Scanning {len(ordered_ports)} ports across entire {network_cidr} network")
@@ -1783,17 +1841,24 @@ class NetworkScanner:
             # ===== STAGE 1: PORT DISCOVERY SCAN =====
             self.logger.info(f"📡 STAGE 1: Port discovery scan starting...")
             
-            # Build nmap args depending on mode
+            # Build nmap args depending on mode, honoring the scan_intensity profile
+            profile = get_scan_profile(self.shared_data)
             if use_top_ports:
-                # Fast scan of most common ports (top 3000) to honor manual discovery requests
-                nmap_args = "-Pn -sT --top-ports 3000 --open -T4 --min-rate 500 --max-retries 1 -v"
-                self.logger.info(f"🚀 Port scan mode: TOP 3000 common ports (fast)")
+                nmap_args = (
+                    f"-Pn -sT --top-ports {profile['top_ports']} --open "
+                    f"{profile['timing']} --min-rate {max(50, profile['min_rate'] // 2)} "
+                    f"--max-retries 1 -v"
+                )
+                self.logger.info(f"🚀 Port scan mode: TOP {profile['top_ports']} common ports (profile: {profile['label']})")
                 self.logger.info(f"   Command: nmap {nmap_args} {ip}")
             else:
-                # Full range scan (can be slow)
-                nmap_args = f"-Pn -sT -p{portstart}-{portend} --open -T4 --min-rate 1000 --max-retries 1 -v"
+                nmap_args = (
+                    f"-Pn -sT -p{portstart}-{portend} --open "
+                    f"{profile['timing']} --min-rate {profile['min_rate']} "
+                    f"--max-retries 1 -v"
+                )
                 total_ports = portend - portstart + 1
-                self.logger.info(f"🚀 Port scan mode: FULL RANGE ({total_ports} ports)")
+                self.logger.info(f"🚀 Port scan mode: FULL RANGE ({total_ports} ports, profile: {profile['label']})")
                 self.logger.info(f"   Command: nmap {nmap_args} {ip}")
             
             # Notify scan started

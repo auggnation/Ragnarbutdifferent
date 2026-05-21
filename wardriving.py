@@ -3185,15 +3185,18 @@ class WardrivingEngine:
             return
 
         # === Generic BLE line (MAC: ... Name: ... RSSI: ...) ===
+        # Require ALL THREE fields to be present so we don't false-positive on
+        # banners or stray "MAC: ..." debug lines from non-BLE devices (e.g.,
+        # Piglet, which has zero BLE code in firmware). A real BLE scan result
+        # always carries MAC + Name/Device + RSSI together.
         ble_match = re.match(
-            r'MAC(?:\s*Address)?:\s*([0-9a-fA-F:]{17})(?:.*?(?:Name|Device):\s*(.+?))?(?:.*?RSSI:\s*(-?\d+))?',
+            r'MAC(?:\s*Address)?:\s*([0-9a-fA-F:]{17}).*?(?:Name|Device):\s*(.+?).*?RSSI:\s*(-?\d+)',
             line
         )
         if ble_match:
             mac = ble_match.group(1).upper()
-            name = (ble_match.group(2) or '').strip().rstrip(',')
-            rssi_str = ble_match.group(3)
-            rssi = int(rssi_str) if rssi_str else -80
+            name = ble_match.group(2).strip().rstrip(',')
+            rssi = int(ble_match.group(3))
             self.session.upsert_bluetooth(mac, name, rssi, 'BLE', gps_lat, gps_lon, gps_alt)
             self._esp_ble_count += 1
             return

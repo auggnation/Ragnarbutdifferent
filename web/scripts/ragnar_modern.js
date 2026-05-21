@@ -3711,6 +3711,9 @@ async function loadConfigData() {
         // Load on-screen kiosk state + service badge
         loadKioskState();
 
+        // Load scan intensity profile + dropdown
+        loadScanIntensity();
+
         // Update filename label when CSV file is selected
         const wdFileInput = document.getElementById('wd-import-file');
         const wdFileLabel = document.getElementById('wd-import-filename');
@@ -3721,6 +3724,60 @@ async function loadConfigData() {
         }
     } catch (error) {
         console.error('Error loading config:', error);
+    }
+}
+
+// ============================================================================
+// SCAN INTENSITY (Light / Medium / High — controls nmap loudness)
+// ============================================================================
+
+async function loadScanIntensity() {
+    const select = document.getElementById('scan-intensity-select');
+    const badge = document.getElementById('scan-intensity-current');
+    if (!select) return;
+    try {
+        const data = await fetchAPI('/api/config/scan-intensity');
+        const current = (data && data.current) ? data.current : 'high';
+        select.value = current;
+        if (badge) {
+            const labels = { light: 'Light', medium: 'Medium', high: 'Viking Rage' };
+            badge.textContent = labels[current] || current;
+            badge.className = 'text-xs px-2 py-0.5 rounded ' + (
+                current === 'high' ? 'bg-red-700 text-red-200' :
+                current === 'medium' ? 'bg-yellow-700 text-yellow-200' :
+                'bg-green-700 text-green-200'
+            );
+        }
+    } catch (e) {
+        console.error('Failed to load scan intensity:', e);
+    }
+}
+
+async function onScanIntensityChanged(selectEl) {
+    const value = selectEl.value;
+    const status = document.getElementById('scan-intensity-status');
+    try {
+        const res = await fetch('/api/config/scan-intensity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ intensity: value })
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+        if (status) {
+            status.textContent = `Saved: ${data.label}`;
+            status.className = 'text-xs mt-2 text-green-400';
+            status.classList.remove('hidden');
+            setTimeout(() => status.classList.add('hidden'), 3000);
+        }
+        loadScanIntensity();
+    } catch (e) {
+        console.error('Failed to set scan intensity:', e);
+        if (status) {
+            status.textContent = `Error: ${e.message}`;
+            status.className = 'text-xs mt-2 text-red-400';
+            status.classList.remove('hidden');
+        }
     }
 }
 
