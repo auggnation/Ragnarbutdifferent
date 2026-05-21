@@ -1314,6 +1314,58 @@ class DatabaseManager:
             logger.error(f"Failed to get stats: {e}")
             return {}
     
+    def get_count_snapshot(self) -> dict:
+        """Cheap aggregate counts used to seed in-memory counters at boot.
+
+        Mirrors the filtering logic in webapp_modern.sync_all_counts() so the
+        dashboard shows correct numbers from the first /api/status response
+        instead of starting at 0 until the deferred full sync completes.
+
+        Returns {active_targets, inactive_targets, total_targets, total_ports}.
+        """
+        snapshot = {
+            'active_targets': 0,
+            'inactive_targets': 0,
+            'total_targets': 0,
+            'total_ports': 0,
+        }
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # Match sync_all_counts() filtering: drop STANDALONE rows and rows missing IP
+                base_filter = "WHERE mac != 'STANDALONE' AND ip IS NOT NULL AND ip != ''"
+
+                cursor.execute(f"SELECT COUNT(*) FROM hosts {base_filter}")
+                snapshot['total_targets'] = cursor.fetchone()[0]
+
+                cursor.execute(f"SELECT COUNT(*) FROM hosts {base_filter} AND status = 'alive'")
+                snapshot['active_targets'] = cursor.fetchone()[0]
+
+                cursor.execute(f"SELECT COUNT(*) FROM hosts {base_filter} AND status != 'alive'")
+                snapshot['inactive_targets'] = cursor.fetchone()[0]
+
+                # Sum port-list lengths only for alive hosts (matches sync logic)
+                cursor.execute(
+                    f"SELECT ports FROM hosts {base_filter} AND status = 'alive' "
+                    "AND ports IS NOT NULL AND ports != '' AND ports != '0'"
+                )
+                total_ports = 0
+                for (ports_str,) in cursor.fetchall():
+                    if not ports_str:
+                        continue
+                    delim = ',' if ',' in ports_str else ';'
+                    for token in ports_str.split(delim):
+                        token = token.strip()
+                        if token and token != '0' and token.isdigit():
+                            total_ports += 1
+                snapshot['total_ports'] = total_ports
+
+            return snapshot
+        except Exception as e:
+            logger.warning(f"get_count_snapshot failed: {e}")
+            return snapshot
+
     def export_to_csv(self, csv_path: str = None) -> bool:
         """
         Export database to CSV format (for backward compatibility).

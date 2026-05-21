@@ -1112,6 +1112,31 @@ class SharedData:
         self._subnet_scan_log_lock = threading.Lock()
         self._SUBNET_LOG_MAX = 50           # keep last 50 entries
 
+        # Seed target/port counters from SQLite so the dashboard shows the
+        # last-known numbers from the first /api/status response, instead of
+        # 0 until the deferred sync_all_counts() walks every host.
+        self._seed_counts_from_db()
+
+    def _seed_counts_from_db(self):
+        """Populate target/port counters from the active network's SQLite store."""
+        if get_db is None or self._pager_mode:
+            return
+        try:
+            snapshot = get_db(currentdir=self.currentdir).get_count_snapshot()
+        except Exception as exc:
+            logger.debug(f"Skipping count seed (db not ready): {exc}")
+            return
+        self.targetnbr = snapshot.get('active_targets', 0)
+        self.portnbr = snapshot.get('total_ports', 0)
+        self.total_targetnbr = snapshot.get('total_targets', 0)
+        self.inactive_targetnbr = snapshot.get('inactive_targets', 0)
+        self.networkkbnbr = self.total_targetnbr
+        logger.info(
+            f"Seeded counters from DB: targets={self.targetnbr} "
+            f"(total={self.total_targetnbr}, inactive={self.inactive_targetnbr}), "
+            f"ports={self.portnbr}"
+        )
+
     def load_gamification_data(self):
         """Load persistent gamification progress from disk."""
         os.makedirs(self.datadir, exist_ok=True)
