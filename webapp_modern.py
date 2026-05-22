@@ -4105,13 +4105,24 @@ def get_network():
                     alive_count += 1
                 elif status == 'degraded':
                     degraded_count += 1
+
+                # Rogue / threat device detection
+                from device_classifier import detect_threats
+                threats = detect_threats(
+                    vendor=host.get('vendor', ''),
+                    mac=host.get('mac', ''),
+                    hostname=host.get('hostname', ''),
+                    ports=ports
+                )
             
                 network_data.append({
                     'mac': host.get('mac', ''),
                     'ip': host.get('ip', ''),
                     'hostname': host.get('hostname', ''),
+                    'vendor': host.get('vendor', ''),
                     'status': status,
                     'ports': ports,
+                    'threats': threats,
                     'failed_pings': host.get('failed_ping_count', 0),
                     'last_seen': host.get('last_seen', ''),
                     # Action statuses
@@ -10118,6 +10129,54 @@ def get_vulnerabilities_grouped():
                     'resolved': vuln_info.get('resolved')
                 })
             
+            # Inject rogue/threat device detections from main scanner hosts
+            try:
+                from device_classifier import detect_threats
+                hosts = shared_data.db_manager.get_all_hosts() if hasattr(shared_data, 'db_manager') and shared_data.db_manager else []
+                for host in hosts:
+                    host_ip = host.get('ip', '')
+                    if not host_ip:
+                        continue
+                    ports_str = host.get('ports', '')
+                    ports_list = [p.strip() for p in ports_str.split(',') if p.strip()] if ports_str else []
+                    threats = detect_threats(
+                        vendor=host.get('vendor', ''),
+                        mac=host.get('mac', ''),
+                        hostname=host.get('hostname', ''),
+                        ports=ports_list
+                    )
+                    for threat in threats:
+                        if host_ip not in grouped:
+                            grouped[host_ip] = {
+                                'ip': host_ip,
+                                'total_vulnerabilities': 0,
+                                'severity_counts': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0},
+                                'affected_ports': set(),
+                                'affected_services': set(),
+                                'vulnerabilities': []
+                            }
+                        threat_vuln_id = f"threat_{threat['id']}_{host_ip.replace('.','_')}"
+                        # Avoid duplicate threat entries
+                        existing_ids = {v['id'] for v in grouped[host_ip]['vulnerabilities']}
+                        if threat_vuln_id not in existing_ids:
+                            grouped[host_ip]['total_vulnerabilities'] += 1
+                            sev = threat['severity']
+                            if sev in grouped[host_ip]['severity_counts']:
+                                grouped[host_ip]['severity_counts'][sev] += 1
+                            grouped[host_ip]['affected_services'].add(threat['category'])
+                            grouped[host_ip]['vulnerabilities'].append({
+                                'id': threat_vuln_id,
+                                'port': 0,
+                                'service': threat['category'],
+                                'vulnerability': f"⚠ ROGUE DEVICE: {threat['name']} — {threat['description']}",
+                                'severity': sev,
+                                'discovered': datetime.now().isoformat(),
+                                'status': 'active',
+                                'resolved': None
+                            })
+            except Exception as e:
+                logger.warning(f"Threat detection enrichment failed: {e}")
+
             # Convert sets to lists for JSON serialization
             for host_data in grouped.values():
                 host_data['affected_ports'] = sorted(list(host_data['affected_ports']))

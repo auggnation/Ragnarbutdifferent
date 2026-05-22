@@ -2851,6 +2851,9 @@ function normalizeHostRecord(hostData) {
     const lastScanIso = hostData.last_scan || hostData.LastScan || hostData.last_vuln_scan || '';
     const lastScan = buildLastScanInfo(rawScanStatus, lastScanIso);
 
+    // Threat detection flags from backend
+    const threats = Array.isArray(hostData.threats) ? hostData.threats : [];
+
     return {
         ip: String(ip).trim(),
         hostname: hostname || '',
@@ -2861,6 +2864,7 @@ function normalizeHostRecord(hostData) {
         vulnerabilityCount: uniqueVulns.length,
         vulnerabilityPreview: uniqueVulns.slice(0, 2).join('; '),
         vulnerabilityFull: uniqueVulns.join('; '),
+        threats,
         lastScan,
         raw: hostData
     };
@@ -2905,6 +2909,24 @@ function formatLastScanCell(info) {
     return `<div${tooltip}><span class="${info.className}">${escapeHtml(info.label)}</span>${timestampLine}</div>`;
 }
 
+function formatThreatBadge(threats) {
+    if (!threats || threats.length === 0) return '';
+    const severityColors = {
+        critical: 'bg-red-600 text-white',
+        high: 'bg-orange-600 text-white',
+        medium: 'bg-yellow-600 text-black',
+        low: 'bg-blue-600 text-white'
+    };
+    const worst = threats.reduce((a, b) => {
+        const order = { critical: 0, high: 1, medium: 2, low: 3 };
+        return (order[a.severity] || 3) <= (order[b.severity] || 3) ? a : b;
+    });
+    const cls = severityColors[worst.severity] || severityColors.medium;
+    const tooltip = threats.map(t => `[${t.severity.toUpperCase()}] ${t.name}: ${t.description}`).join('\n');
+    const label = threats.length === 1 ? worst.name : `${threats.length} threats`;
+    return `<span class="px-1.5 py-0.5 rounded text-xs font-bold ${cls} cursor-help" title="${escapeHtml(tooltip)}">⚠ ${escapeHtml(label)}</span>`;
+}
+
 function renderHostRow(normalized) {
     const hostname = normalized.hostname ? escapeHtml(normalized.hostname) : 'Unknown';
     const mac = normalized.mac ? escapeHtml(normalized.mac) : 'Unknown';
@@ -2915,12 +2937,14 @@ function renderHostRow(normalized) {
     const isInactive = normalized.statusClass.includes('red');
     const dotColor = isActive ? 'bg-green-500' : (isInactive ? 'bg-red-500' : 'bg-yellow-500');
     const statusDot = `<span class="inline-block w-2 h-2 rounded-full ${dotColor} mr-1"></span>`;
+    const threatBadge = formatThreatBadge(normalized.threats);
 
     return `
         <td class="py-3 px-4" data-label="Status">
             <span class="px-2 py-1 rounded text-xs ${normalized.statusClass} flex items-center">
                 ${statusDot}${escapeHtml(normalized.statusText)}
             </span>
+            ${threatBadge}
         </td>
         <td class="py-3 px-4 font-mono" data-label="IP Address">${ip}</td>
         <td class="py-3 px-4" data-label="Hostname">${hostname || 'Unknown'}</td>

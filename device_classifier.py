@@ -443,6 +443,255 @@ def classify_device(vendor, ports, gateway_ip=None, device_ip=None):
 
 
 # ---------------------------------------------------------------------------
+# Rogue / threat device detection
+# ---------------------------------------------------------------------------
+# Each entry: id, name, severity, description, match criteria.
+# Match criteria are ANDed within a rule, ORed across rules.
+# - vendor_keywords: any substring match in vendor (lowercase)
+# - mac_prefixes: OUI prefix match (uppercase, colon-separated)
+# - hostname_keywords: any substring match in hostname (lowercase)
+# - port_required: all listed ports must be open
+# - port_any: at least one listed port must be open
+_THREAT_SIGNATURES = [
+    # --- Malicious USB / implant devices ---
+    {
+        'id': 'omg_cable',
+        'name': 'O.M.G Cable',
+        'severity': 'critical',
+        'category': 'Malicious USB',
+        'description': 'Malicious USB cable with hidden WiFi — keystroke injection and data exfiltration',
+        'vendor_keywords': ['espressif'],
+        'port_any': [80, 443],
+        'hostname_keywords': ['omg', 'o.mg'],
+    },
+    {
+        'id': 'whid_cactus',
+        'name': 'WHID Cactus HID Injector',
+        'severity': 'critical',
+        'category': 'Malicious USB',
+        'description': 'WiFi-enabled HID injector for remote keystroke injection',
+        'vendor_keywords': ['espressif'],
+        'hostname_keywords': ['cactus', 'whid'],
+    },
+    {
+        'id': 'wifi_keylogger',
+        'name': 'WiFi Keylogger (AirDrive/KeyGrabber)',
+        'severity': 'critical',
+        'category': 'Malicious USB',
+        'description': 'Hardware keylogger with WiFi exfiltration capability',
+        'hostname_keywords': ['airdrive', 'keygrabber'],
+    },
+    # --- Attack tools ---
+    {
+        'id': 'esp32_marauder',
+        'name': 'ESP32 Marauder',
+        'severity': 'high',
+        'category': 'Attack Tool',
+        'description': 'ESP32-based WiFi attack platform — deauth, beacon spam, packet capture',
+        'vendor_keywords': ['espressif'],
+        'hostname_keywords': ['marauder'],
+    },
+    {
+        'id': 'esp_deauther',
+        'name': 'ESP8266 Deauther (DSTIKE/Spacehuhn)',
+        'severity': 'high',
+        'category': 'Attack Tool',
+        'description': 'WiFi deauthentication attack device',
+        'vendor_keywords': ['espressif'],
+        'hostname_keywords': ['deauther', 'dstike', 'pwned'],
+    },
+    {
+        'id': 'pwnagotchi',
+        'name': 'Pwnagotchi',
+        'severity': 'high',
+        'category': 'Attack Tool',
+        'description': 'AI-assisted WiFi handshake capture device',
+        'hostname_keywords': ['pwnagotchi'],
+    },
+    # --- Pentesting implants / drop boxes ---
+    {
+        'id': 'lan_turtle',
+        'name': 'Hak5 LAN Turtle',
+        'severity': 'critical',
+        'category': 'Network Implant',
+        'description': 'Covert USB-Ethernet network implant for man-in-the-middle and exfiltration',
+        'mac_prefixes': ['00:0E:C6'],  # ASIX Electronics
+        'port_any': [22, 8080],
+    },
+    {
+        'id': 'packet_squirrel',
+        'name': 'Hak5 Packet Squirrel',
+        'severity': 'critical',
+        'category': 'Network Implant',
+        'description': 'Inline network implant for packet capture and man-in-the-middle',
+        'hostname_keywords': ['packetsquirrel', 'packet-squirrel', '172-psq'],
+    },
+    {
+        'id': 'glinet_dropbox',
+        'name': 'GL.iNet Router (Potential Drop Box)',
+        'severity': 'medium',
+        'category': 'Network Implant',
+        'description': 'GL.iNet travel router — commonly used as pentesting drop box',
+        'mac_prefixes': ['E4:95:6E', '94:83:C4'],
+    },
+    {
+        'id': 'rogue_pi',
+        'name': 'Rogue Raspberry Pi',
+        'severity': 'medium',
+        'category': 'Network Implant',
+        'description': 'Raspberry Pi on network — could be an unauthorized drop box',
+        'mac_prefixes': ['B8:27:EB', 'DC:A6:32', 'D8:3A:DD', '2C:CF:67'],
+    },
+    # --- Surveillance devices ---
+    {
+        'id': 'spy_camera_ipcam',
+        'name': 'Hidden WiFi Camera (Generic IP Cam)',
+        'severity': 'high',
+        'category': 'Surveillance',
+        'description': 'Cheap WiFi camera with known spy-cam firmware signatures',
+        'hostname_keywords': ['ipcam', 'hicamera', 'vstarcam', 'wificam', 'hichip', 'usmartcam'],
+    },
+    {
+        'id': 'spy_camera_rtsp',
+        'name': 'Unregistered Camera (RTSP)',
+        'severity': 'medium',
+        'category': 'Surveillance',
+        'description': 'Device with RTSP streaming port — possible unauthorized camera',
+        'vendor_keywords': ['shenzhen bilian', 'hangzhou xiongmai', 'zhejiang dahua'],
+        'port_any': [554, 8554, 37777],
+    },
+    # --- Rogue network equipment ---
+    {
+        'id': 'flipper_wifi',
+        'name': 'Flipper Zero WiFi Dev Board',
+        'severity': 'high',
+        'category': 'Attack Tool',
+        'description': 'Flipper Zero with WiFi dev board running Marauder or BlackMagic firmware',
+        'vendor_keywords': ['espressif'],
+        'hostname_keywords': ['flipper', 'blackmagic'],
+    },
+    {
+        'id': 'piglet_wardriver',
+        'name': 'Piglet Wardriver',
+        'severity': 'high',
+        'category': 'Attack Tool',
+        'description': 'ESP32 wardriving device (Piglet) — captures WiFi/BLE networks and GPS coordinates',
+        'vendor_keywords': ['espressif'],
+        'hostname_keywords': ['piglet'],
+    },
+    {
+        'id': 'wifi_pineapple',
+        'name': 'Hak5 WiFi Pineapple',
+        'severity': 'critical',
+        'category': 'Attack Tool',
+        'description': 'WiFi Pineapple rogue AP platform — evil twin, MitM, and credential harvesting',
+        'hostname_keywords': ['pineapple'],
+        'port_any': [1471, 8080],
+    },
+    {
+        'id': 'rogue_espressif',
+        'name': 'Unknown Espressif Device',
+        'severity': 'low',
+        'category': 'Suspicious',
+        'description': 'ESP32/ESP8266 device on network — could be IoT or rogue device',
+        'vendor_keywords': ['espressif'],
+        'port_any': [80, 443, 8080],
+    },
+]
+
+# Pre-compute OUI prefix set for fast lookup
+_THREAT_OUI_PREFIXES = set()
+for _sig in _THREAT_SIGNATURES:
+    for _pfx in _sig.get('mac_prefixes', []):
+        _THREAT_OUI_PREFIXES.add(_pfx.upper())
+
+
+def detect_threats(vendor, mac, hostname='', ports=None):
+    """Check a host against rogue/threat device signatures.
+
+    Args:
+        vendor: MAC OUI vendor string (e.g. "Espressif Inc.")
+        mac: full MAC address (e.g. "AC:67:B2:01:23:45")
+        hostname: device hostname if known
+        ports: list of open port numbers/strings
+
+    Returns:
+        list of matched threat dicts, each with:
+            id, name, severity, category, description
+        Empty list if no threats detected.
+    """
+    if not vendor and not mac and not hostname:
+        return []
+
+    vendor_lower = (vendor or '').lower()
+    hostname_lower = (hostname or '').lower()
+    mac_upper = (mac or '').upper()
+    mac_prefix = mac_upper[:8] if len(mac_upper) >= 8 else ''
+
+    port_set = set()
+    for p in (ports or []):
+        try:
+            port_set.add(int(str(p).split('/')[0]))
+        except (ValueError, IndexError):
+            pass
+
+    matches = []
+    for sig in _THREAT_SIGNATURES:
+        # Each criterion that is present must match (AND logic)
+        matched = True
+        criteria_count = 0
+
+        # Vendor keyword check
+        if 'vendor_keywords' in sig:
+            criteria_count += 1
+            if not any(kw in vendor_lower for kw in sig['vendor_keywords']):
+                matched = False
+
+        # MAC OUI prefix check
+        if 'mac_prefixes' in sig:
+            criteria_count += 1
+            if not any(mac_prefix == pfx for pfx in sig['mac_prefixes']):
+                matched = False
+
+        # Hostname keyword check
+        if 'hostname_keywords' in sig:
+            criteria_count += 1
+            if not any(kw in hostname_lower for kw in sig['hostname_keywords']):
+                matched = False
+
+        # Required ports (ALL must be open)
+        if 'port_required' in sig:
+            criteria_count += 1
+            if not all(p in port_set for p in sig['port_required']):
+                matched = False
+
+        # Any port (at least ONE must be open)
+        if 'port_any' in sig:
+            criteria_count += 1
+            if not any(p in port_set for p in sig['port_any']):
+                matched = False
+
+        # Must have at least one criterion and all present criteria must match
+        if matched and criteria_count > 0:
+            matches.append({
+                'id': sig['id'],
+                'name': sig['name'],
+                'severity': sig['severity'],
+                'category': sig['category'],
+                'description': sig['description'],
+            })
+
+    # Remove low-confidence 'rogue_espressif' if a more specific Espressif
+    # threat already matched (O.M.G, Marauder, Deauther, etc.)
+    if len(matches) > 1:
+        specific_ids = {m['id'] for m in matches if m['id'] != 'rogue_espressif'}
+        if specific_ids:
+            matches = [m for m in matches if m['id'] != 'rogue_espressif']
+
+    return matches
+
+
+# ---------------------------------------------------------------------------
 # All valid device types (for AI classifier validation)
 # ---------------------------------------------------------------------------
 VALID_DEVICE_TYPES = set(DEVICE_TYPE_LABELS.keys())
