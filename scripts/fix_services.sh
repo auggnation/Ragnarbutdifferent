@@ -14,7 +14,7 @@ systemctl stop bettercap 2>/dev/null || true
 # Clean up leftover monitor interface
 echo "[INFO] Cleaning up monitor interface..."
 ip link set mon0 down 2>/dev/null || true
-iw mon0 del 2>/dev/null || true
+iw dev mon0 del 2>/dev/null || true
 
 # Disable pwnagotchi - must NEVER start on boot
 echo "[INFO] Disabling pwnagotchi (boot disabled)..."
