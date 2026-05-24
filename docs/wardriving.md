@@ -1,13 +1,20 @@
-# Wardriving — Ragnar + HuginnESP
+# Wardriving — Ragnar
 
 ## Overview
 
 Ragnar's wardriving engine collects WiFi networks, BLE devices, cell towers, and GPS positions while driving. Data is stored in SQLite per session and can be exported to WiGLE CSV or KML.
 
-The system has three data sources:
-- **WiFi adapters (wlan)** — Linux adapters in monitor/managed mode, scanning directly via `iw`
-- **HuginnESP** — ESP32-S3 via USB serial, real-time WiFi + BLE + threat detection
-- **Piglet** — Standalone ESP32 wardriver, imports WiGLE CSV files collected in the field
+Ragnar supports **five operating modes**, in any combination — all five can run at the same time and merge into one session DB:
+
+| # | Mode | Hardware | What it adds |
+|---|------|----------|--------------|
+| 1 | **Standalone wardriver** | Raspberry Pi (or PC) with its built-in Wi-Fi and/or one or more USB Wi-Fi adapters | WiFi scanning via `iw`, multi-adapter antenna coverage |
+| 2 | **+ HuginnESP (USB)** | ESP32-S3-Touch-LCD-4B running [HuginnESP](https://github.com/PierreGode/HuginnESP) | Real-time WiFi + BLE + AirTag/Flipper/skimmer/pineapple detection |
+| 3 | **+ Piglet (USB)** | Any [Piglet](https://github.com/Hamspiced/piglet) board (XIAO ESP32-S3/C5/C6, LilyGo T-Dongle C5) | Live WiGLE-CSV stream over serial — no SD-card round-trip |
+| 4 | **+ Piglet Coordinator (USB)** | Dedicated coordinator firmware on a Waveshare ESP32-C5-WIFI6-KIT *or* ESP32-S3-Touch-LCD-4B | Receives records from a fleet of Piglet mesh nodes over ESP-Now and forwards them to Ragnar live |
+| 5 | **+ Piglet Core (USB)** | A regular Piglet board running mesh `core` mode, tethered to Ragnar | Same idea as #4 but on a standard Piglet — the Core scans locally *and* aggregates its mesh nodes, streaming the combined feed to Ragnar |
+
+Modes 1+2, 1+3, 1+4, 1+5 are all common. Modes 4 and 5 are alternative coordinator implementations — pick whichever hardware you have. All four serial companions are auto-detected on the same `/dev/ttyACM*` paths; Ragnar identifies which one is on the wire from its boot banner.
 
 Everything logged automatically receives GPS coordinates if a GPS receiver is connected.
 
@@ -34,6 +41,28 @@ Details and the math are in the [GPS section](#gps) below.
 | Firmware | [HuginnESP](https://github.com/PierreGode/HuginnESP) (PlatformIO Arduino) |
 | Libraries | LovyanGFX 1.1.16, NimBLE-Arduino 1.4.1 |
 
+### Piglet Coordinator — dedicated firmware (ESP32-C5 / ESP32-S3-LCD)
+
+Purpose-built ESP-Now mesh coordinator for Piglet nodes. Doesn't scan WiFi
+itself — it just listens to the mesh and forwards everything to Ragnar over USB
+as one-object-per-line JSON. Two boards are supported with the same firmware
+image; flash either one from the browser at the
+[GitHub Pages flasher](https://pierregode.github.io/Ragnar/) (no toolchain
+required).
+
+| Property | C5 (headless) | S3-LCD (with display) |
+|----------|---------------|-----------------------|
+| Board | Waveshare ESP32-C5-WIFI6-KIT | Waveshare ESP32-S3-Touch-LCD-4B |
+| Processor | RISC-V @240 MHz | LX7 dual-core @240 MHz |
+| Flash | 16 MB | 16 MB |
+| PSRAM | 4 MB | 8 MB OPI |
+| Display | none | 4″ 480×480 RGB IPS touch |
+| Radio | Wi-Fi 6 dual-band, BLE 5 | Wi-Fi 4, BLE 5 |
+| Serial | USB CDC, 460800 baud | USB CDC, 460800 baud |
+| ESP-Now channel | 6 | 6 |
+| Announce banner | `{"device":"RagnarCoord","fw":"c5-1","board":"ESP32-C5",...}` | `{"device":"RagnarCoord","fw":"s3-lcd-1","board":"ESP32-S3-LCD",...}` |
+| Source | [`espnow_bridge_firmware/`](../espnow_bridge_firmware/) | same |
+
 ### GPS
 
 Optional USB GPS receiver (NMEA via pyserial). Auto-detected at startup.
@@ -42,21 +71,52 @@ Optional USB GPS receiver (NMEA via pyserial). Auto-detected at startup.
 
 ## Architecture
 
+Ragnar is the host. WiFi adapters scan locally; one (optional) serial companion
+adds a second feed; an optional GPS receiver stamps everything. All sources
+write into the same per-session SQLite DB.
+
 ```
-┌─────────────────────┐     USB Serial      ┌──────────────────┐
-│  Raspberry Pi / PC  │◄───────────────────►│   HuginnESP      │
-│                     │   460800 baud        │   ESP32-S3       │
-│  Ragnar             │                      │                  │
-│  ├─ wardriving.py   │   JSON + alerts      │  ├─ WiFi scan    │
-│  ├─ webapp_modern.py│◄────────────────────│  ├─ BLE scan     │
-│  └─ web UI          │                      │  ├─ AirTag det.  │
-│                     │   Commands           │  ├─ Flipper det. │
-│  GPS ◄──────────┐   │──────────────────►  │  ├─ Skimmer det. │
-│  (USB NMEA)     │   │   scanap, blescan   │  └─ Pineapple    │
-│                 ▼   │                      │                  │
-│  SQLite session DB  │                      │  480×480 display │
-└─────────────────────┘                      └──────────────────┘
+                                                ┌───────────────────────────┐
+                                          ┌────►│  HuginnESP                │  ← mode 2
+                                          │     │  WiFi + BLE + threats     │
+                                          │     │  (480×480 touch)          │
+                                          │     └───────────────────────────┘
+                                          │
+                                          │     ┌───────────────────────────┐
+                                          ├────►│  Piglet (plain)           │  ← mode 3
+┌─────────────────────────────┐           │     │  WigleWifi-1.4 CSV stream │
+│  Raspberry Pi / PC          │           │     └───────────────────────────┘
+│                             │ USB CDC   │
+│  Ragnar                     │◄──────────┤     ┌───────────────────────────┐
+│   ├─ wardriving.py          │  460800   ├────►│  Piglet Coordinator       │  ← mode 4
+│   ├─ webapp_modern.py       │           │     │  (dedicated C5 / S3-LCD)  │
+│   └─ web UI                 │           │     │  receives mesh via ESPNow │
+│                             │           │     └───────────────────────────┘
+│  wlan0..N  ←─ iw scan       │           │                  ▲
+│  (built-in + USB antennas)  │ ← mode 1  │                  │ ESP-Now ch 6
+│                             │           │                  ▼
+│  GPS (USB NMEA, opt.)       │           │     ┌───────────────────────────┐
+│                             │           │     │  Piglet mesh nodes        │
+│  SQLite session DB          │           │     └───────────────────────────┘
+└─────────────────────────────┘           │
+                                          │     ┌───────────────────────────┐
+                                          └────►│  Piglet Core (regular     │  ← mode 5
+                                                │  Piglet, mesh-core mode)  │
+                                                │  scans + aggregates mesh  │
+                                                └───────────────────────────┘
+                                                                  ▲
+                                                                  │ ESP-Now ch 6
+                                                                  ▼
+                                                ┌───────────────────────────┐
+                                                │  Piglet mesh nodes        │
+                                                └───────────────────────────┘
 ```
+
+One serial companion at a time — they all share `/dev/ttyACM*`. Modes 4 and 5
+are different implementations of "coordinator for a Piglet mesh"; you'd pick
+one based on which hardware you have. The HuginnESP protocol below is the most
+elaborate of the four; Piglet variants speak a simpler one-line-per-record
+protocol described later.
 
 ---
 
@@ -327,6 +387,7 @@ Falls back to linear when either endpoint speed is NULL or both are zero. The ch
   "serial_port": "/dev/ttyACM0",
   "serial_networks": 75,
   "serial_unique": 62,
+  "serial_seen_unique": 70,
   "esp_mode": "wardrive",
   "esp_ble_count": 87,
   "esp_alerts": [
@@ -398,28 +459,42 @@ Google Earth format with network positions as markers.
 
 ## Setup
 
-### 1. Flash HuginnESP
+### 1. Pick (and flash) a companion — optional
 
-```bash
-cd HuginnESP
-pio run --target upload     # COM8 on Windows, /dev/ttyACM* on Linux
-```
+You only need a companion for modes 2–5. Standalone mode (1) works without one.
+
+| Mode | Companion | Flash with |
+|------|-----------|-----------|
+| 2 | HuginnESP | `cd HuginnESP && pio run --target upload` (COM8 on Windows, `/dev/ttyACM*` on Linux) |
+| 3 | Piglet (plain) | Piglet's own flasher / Arduino IDE — see the [Piglet repo](https://github.com/Hamspiced/piglet) |
+| 4 | Piglet Coordinator (dedicated) | Browser-flash from [pierregode.github.io/Ragnar/](https://pierregode.github.io/Ragnar/) |
+| 5 | Piglet Core | Flash Piglet as in mode 3, then set `meshModeOnBoot=core` in `wardriver.cfg` |
 
 ### 2. Connect to Ragnar
 
 **Auto-detect (Linux):**
-Click 🔍 Search in the web UI — finds the ESP32 automatically via `udevadm`.
+Click 🔍 Search in the web UI — finds the ESP32 automatically via `udevadm`,
+regardless of which companion firmware is on it.
 
 **Manual:**
 Enter the port (`/dev/ttyACM0` or `COM8`) in the serial field and click Connect.
+
+The serial card's companion label updates from `Companion` → `Huginn` /
+`Piglet` / `Piglet Coordinator` once the boot banner is parsed.
 
 ### 3. GPS (optional)
 
 Connect a USB GPS receiver. Ragnar auto-detects NMEA devices.
 
+In modes 3 and 5 the Piglet board itself has a GPS module — those positions
+ride along inside the WigleWifi CSV rows, so Ragnar's own GPS is optional but
+recommended (it backfills network observations made during Piglet dropouts).
+In modes 2 and 4 the companion has no GPS, so Ragnar's GPS is the only source.
+
 ### 4. Start Wardriving
 
-Click **Start Wardriving** in the web UI. Ragnar begins scanning with all active interfaces + ESP32 serial.
+Click **Start Wardriving** in the web UI. Ragnar begins scanning with all
+active wlan interfaces and ingesting whatever is on the serial port.
 
 ---
 
@@ -449,9 +524,30 @@ Piglet peripherals: I2C GPS (ATGM336H), SSD1306 OLED, SPI SD card module.
 
 ### How It Connects to Ragnar
 
-Piglet is a **standalone field device** — it has no serial command interface. It collects data independently with its own GPS and stores WiGLE CSV files on its SD card.
+Piglet can talk to Ragnar **three ways** — all three coexist with each other and
+with HuginnESP:
 
-**Import workflow:**
+| Path | When to use | Live? |
+|------|-------------|-------|
+| **CSV import** (file upload) | After a standalone field trip where Piglet logged to its SD card | ❌ Offline |
+| **Live USB serial** (mode 3) | Piglet plugged into Ragnar — streams WigleWifi-1.4 CSV rows as it scans | ✅ Yes |
+| **Mesh Core via USB** (mode 5) | Piglet running in mesh `core` mode, plugged into Ragnar — relays its own scans **plus** every record received from mesh nodes | ✅ Yes |
+
+#### Live USB serial (mode 3)
+
+A regular Piglet that's tethered to Ragnar via USB just emits its normal WiGLE
+CSV output over the serial port — first a `WigleWifi-1.4,…` banner, then the
+column header row, then one CSV row per AP. Ragnar reads the header to build a
+column-name → index map (so format bumps like 1.4 → 1.6 don't break anything)
+and inserts each row live into the session DB with `interface='esp32-serial'`.
+
+Detection signal: the boot banner contains `Piglet`, `[CORE]`, or `WigleWifi-`.
+Once identified, no commands are sent — the parser just listens. The status bar
+chip reads **Piglet · /dev/ttyACM0**.
+
+#### CSV import (offline)
+
+Same end result, file-based:
 
 1. Take Piglet out wardriving — it logs WiFi networks + GPS to SD card
 2. When home, download the CSV files via Piglet's web UI (connects to your WiFi) or remove the SD card
@@ -475,31 +571,49 @@ Piglet is a **standalone field device** — it has no serial command interface. 
 
 The importer handles Piglet's `WigleWifi-1.4` metadata header line automatically.
 
-### Piglet vs HuginnESP
+### Companion comparison
 
-| Feature | HuginnESP | Piglet |
-|---------|-----------|--------|
-| Connection | USB serial (live) | CSV import (offline) |
-| Real-time data | ✅ Continuous | ❌ Post-collection |
-| WiFi scanning | ✅ | ✅ (+ 5 GHz on C5) |
-| BLE scanning | ✅ Filtered + All | ❌ |
-| AirTag detection | ✅ | ❌ |
-| Flipper detection | ✅ | ❌ |
-| Skimmer detection | ✅ | ❌ |
-| Pineapple detection | ✅ | ❌ |
-| Built-in GPS | ❌ (uses Ragnar's) | ✅ Own GPS module |
-| SD card logging | ❌ | ✅ WiGLE CSV |
-| WiGLE direct upload | ❌ | ✅ Via Piglet web UI |
-| ESP-Now mesh | ❌ | ✅ Multi-node wardriving |
-| Display | 480×480 RGB touch | 128×64 OLED |
+| Feature | HuginnESP (mode 2) | Piglet — live USB (mode 3) | Piglet Coordinator (mode 4) | Piglet Core via USB (mode 5) |
+|---------|-------------------|----------------------------|-----------------------------|------------------------------|
+| Hardware | ESP32-S3-Touch-LCD-4B | Any Piglet board | Waveshare C5 or S3-LCD | Any Piglet board |
+| Firmware | HuginnESP | Piglet (stock) | `espnow_bridge_*` (this repo) | Piglet, `meshModeOnBoot=core` |
+| Connection | USB serial (live) | USB serial (live) | USB serial (live) | USB serial (live) |
+| Companion name in UI | `Huginn` | `Piglet` | `Piglet Coordinator` | `Piglet` |
+| Local WiFi scan | ✅ Active per-channel | ✅ | ❌ (no radio scan) | ✅ |
+| BLE / threats | ✅ Full suite | ❌ | ❌ | ❌ |
+| ESP-Now mesh aggregation | ❌ | ❌ | ✅ Receives from N nodes | ✅ Receives from N nodes |
+| Built-in GPS | ❌ (uses Ragnar's) | ✅ Own GPS | ❌ (uses Ragnar's) | ✅ Own GPS |
+| SD-card logging | ❌ | ✅ | ❌ | ✅ |
+| Wire protocol | JSON + multi-line | WigleWifi-1.4 CSV stream | One-line-per-record JSON | WigleWifi-1.4 CSV stream |
+| Display | 480×480 RGB touch | 128×64 OLED | none / 480×480 (S3-LCD) | 128×64 OLED |
 
-Both devices complement each other — use HuginnESP for real-time scanning with threat detection, and Piglet for standalone field collection that gets imported later.
+All four companions can be used together with the **standalone wardriver** mode
+(mode 1, Ragnar's own Wi-Fi adapters) — they're additive, not exclusive. The
+only constraint is that there's just one serial port at a time, so only one
+companion can be wired up per Ragnar.
 
 ---
 
 ## Piglet ESP-Now Mesh Network
 
-Piglet supports ESP-Now mesh networking for multi-node wardriving. One Piglet acts as the **Core** (coordinator) while one or more Piglets act as **Nodes**, forwarding their WiFi scan results over ESP-Now. The Core handles GPS stamping and data logging — nodes don't need their own SD card or GPS fix.
+Piglet supports ESP-Now mesh networking for multi-node wardriving. One device
+acts as the **coordinator** while one or more Piglets act as **Nodes**,
+forwarding their WiFi scan results over ESP-Now on channel 6.
+
+You can run the coordinator role two ways, and Ragnar treats them as separate
+operating modes:
+
+- **Piglet Core (mode 5)** — a regular Piglet board flipped into mesh `core`
+  mode via `meshModeOnBoot=core`. Same hardware as a node, just promoted. It
+  scans WiFi *and* aggregates the mesh, and can either log everything to its
+  own SD card or stream live to Ragnar over USB.
+- **Piglet Coordinator (mode 4)** — the dedicated `espnow_bridge_*` firmware
+  in this repo, flashed onto a Waveshare ESP32-C5 or ESP32-S3-Touch-LCD-4B.
+  Purpose-built for the coordinator role — it doesn't scan WiFi itself, just
+  receives mesh records and forwards them to Ragnar live as JSON.
+
+Both expose the same end result (mesh-wide records hitting Ragnar's session
+DB) with different ergonomics — pick by hardware availability.
 
 ### Architecture
 
@@ -576,10 +690,70 @@ While in Mesh Node mode the OLED shows:
 
 | Role | Recommended Board | Notes |
 |------|-------------------|-------|
-| Core | XIAO ESP32-C5 | 2.4 + 5 GHz, needs GPS + SD |
-| Core | XIAO ESP32-S3 | 2.4 GHz only, needs GPS + SD |
+| Core (mode 5) | XIAO ESP32-C5 | 2.4 + 5 GHz, needs GPS + SD |
+| Core (mode 5) | XIAO ESP32-S3 | 2.4 GHz only, needs GPS + SD |
+| Coordinator (mode 4) | Waveshare ESP32-C5-WIFI6-KIT | Headless, uses Ragnar's GPS — no SD card needed |
+| Coordinator (mode 4) | Waveshare ESP32-S3-Touch-LCD-4B | 480×480 display showing live mesh stats |
 | Node | Any supported XIAO | No GPS or SD required |
 | Node | LilyGo T-Dongle C5 | Compact node with built-in TFT |
+
+---
+
+### Piglet Coordinator firmware (mode 4) — dedicated coordinator
+
+The `espnow_bridge_firmware/` directory ships two builds of a purpose-built
+coordinator firmware (one for ESP32-C5, one for ESP32-S3-Touch-LCD-4B). It
+replaces Piglet's Core role with a thinner, USB-tethered bridge:
+
+- No local WiFi scan, no SD card, no GPS dependency on the ESP — Ragnar
+  handles all of that.
+- Receives `MSG_NODE_REPORT` frames from every paired Piglet on ESP-Now
+  channel 6, distributes the 40-entry scan-channel table evenly across the
+  nodes, and forwards each record to Ragnar over USB CDC at 460800 baud.
+- Announces itself on boot with
+  `{"device":"RagnarCoord","fw":"<build>","board":"<board>","caps":["espnow","piglet-core"]}`
+  so Ragnar can flip the companion identity to `Piglet Coordinator` and adjust
+  the UI accordingly.
+- Emits one `{"type":"WIFI",...}` JSON line per record and one
+  `{"type":"NODE",...}` row per active mesh node every ~10 s (used by Ragnar
+  to render the per-node breakdown bar with each node's MAC, records-rx, and
+  age-since-last-update).
+- The S3-LCD build also draws live mesh stats on its 480×480 panel.
+
+#### Flashing
+
+Browser-flash either board at
+[pierregode.github.io/Ragnar/](https://pierregode.github.io/Ragnar/) — pick the
+matching board, plug it into Ragnar over USB-C, click Forge. The GitHub Actions
+workflow rebuilds both binaries on every `main` push and redeploys the pages
+site.
+
+#### Status integration
+
+When a Piglet Coordinator is connected, the `/api/wardriving/status` payload
+includes:
+
+```json
+"companion_name": "Piglet Coordinator",
+"coordinator_board": "ESP32-C5",
+"coordinator_fw": "c5-1",
+"mesh_node_count": 1,
+"coordinator_nodes": [
+  {"mac": "AA:BB:CC:DD:EE:FF", "idx": 0, "records_rx": 4637, "age_s": 3}
+]
+```
+
+The wardriving card shows:
+
+```
+Piglet Coordinator · /dev/ttyACM0 · Records: 4637 | WiFi: 70 · Unique: 8 | Mesh: 1 nodes
+```
+
+where **Records** is total mesh records relayed (sum of every node's
+`records_rx`), **WiFi** is the count of distinct BSSIDs the mesh side has
+ever observed (`serial_seen_unique`), **Unique** is BSSIDs only the mesh
+saw — never picked up by Ragnar's local wlan adapters (`serial_unique`), and
+**Mesh** is the live node count.
 
 ### Tips
 

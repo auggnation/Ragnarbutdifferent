@@ -1293,8 +1293,14 @@ class WardrivingEngine:
         self._current_esp_mode = 'wifi'
         self._esp_ble_count = 0
         self._esp_stations = []
-        self._companion_name = ''  # 'Huginn' or 'Piglet'
+        self._companion_name = ''  # 'Huginn', 'Piglet', or 'Piglet Coordinator'
         self._mesh_node_count = 0  # Piglet Core mesh node count
+        # Per-node table maintained from {"type":"NODE",...} JSON rows the
+        # standalone coordinator firmware emits every 10 s. Keyed by MAC.
+        # Each entry: {mac, idx, records_rx, age_s, last_update}
+        self._coordinator_nodes = {}
+        self._coordinator_board = ''
+        self._coordinator_fw    = ''
         # Queue of `set ...\r\n` byte-strings for the listener thread to write
         # to Huginn. Webapp thread enqueues; listener owns the serial handle.
         self._huginn_config_queue = queue.Queue()
@@ -1754,6 +1760,25 @@ class WardrivingEngine:
     def is_running(self):
         return self._running
 
+    def _active_coordinator_nodes(self):
+        """Return non-expired entries from the coordinator node table,
+        sorted by node index. Also prunes expired entries in place so the
+        dict doesn't grow forever, and keeps `_mesh_node_count` honest."""
+        nodes = getattr(self, '_coordinator_nodes', None)
+        if not nodes:
+            return []
+        now_ts = time.time()
+        expired = [m for m, n in nodes.items()
+                   if (now_ts - n.get('last_update', 0)) > 30.0]
+        for m in expired:
+            nodes.pop(m, None)
+        # Keep the legacy counter in sync with the active table.
+        try:
+            self._mesh_node_count = len(nodes)
+        except Exception:
+            pass
+        return sorted(nodes.values(), key=lambda n: n.get('idx', 0))
+
     def get_status(self):
         """Get current wardriving status."""
         # GPS status: use live GPS if running, otherwise probe for device (cached)
@@ -1801,6 +1826,15 @@ class WardrivingEngine:
             'serial_networks': self.serial_networks,
             'companion_name': self._companion_name,
             'mesh_node_count': self._mesh_node_count,
+            'coordinator': None,
+            'coordinator_board': getattr(self, '_coordinator_board', ''),
+            'coordinator_fw':    getattr(self, '_coordinator_fw', ''),
+            # Per-node table from {"type":"NODE",...} dumps. Expire entries
+            # we haven't seen refreshed in 30 s — the coordinator emits a
+            # NODE row per active node every 10 s, so any node that hasn't
+            # had an update in 30 s has either been dropped by the
+            # coordinator (60 s timeout) or the link is broken.
+            'coordinator_nodes': self._active_coordinator_nodes(),
             'esp_mode': getattr(self, '_current_esp_mode', ''),
             'esp_ble_count': getattr(self, '_esp_ble_count', 0),
             'esp_alerts': getattr(self, '_esp_alerts', [])[-5:],  # Last 5 alerts
@@ -1839,9 +1873,22 @@ class WardrivingEngine:
             result['stats'] = self.session.get_stats()
             try:
                 with sqlite3.connect(self.session.db_path) as conn:
-                    # Unique ESP32-only networks (found by esp32-serial but not by wlan)
+                    # Total distinct networks the ESP serial side ever observed.
+                    # Sourced from network_observations so we catch every BSSID
+                    # the companion saw, not only the ones it was first to log.
                     row = conn.execute(
-                        "SELECT COUNT(DISTINCT bssid) FROM networks WHERE interface='esp32-serial'"
+                        "SELECT COUNT(DISTINCT bssid) FROM network_observations "
+                        "WHERE interface='esp32-serial'"
+                    ).fetchone()
+                    result['serial_seen_unique'] = row[0] if row else 0
+                    # ESP-only networks: BSSIDs seen by esp32-serial that no
+                    # local wlan adapter ever saw. Used by the "Unique" chip.
+                    row = conn.execute(
+                        "SELECT COUNT(DISTINCT o.bssid) FROM network_observations o "
+                        "WHERE o.interface='esp32-serial' AND NOT EXISTS ("
+                        "  SELECT 1 FROM network_observations o2 "
+                        "  WHERE o2.bssid = o.bssid AND o2.interface != 'esp32-serial'"
+                        ")"
                     ).fetchone()
                     result['serial_unique'] = row[0] if row else 0
                     # Unique BLE devices detected via Huginn (overrides running line counter
@@ -1856,6 +1903,7 @@ class WardrivingEngine:
                         pass
             except Exception:
                 result['serial_unique'] = 0
+                result['serial_seen_unique'] = 0
         return result
 
     def get_session_list(self):
@@ -2823,7 +2871,7 @@ class WardrivingEngine:
         - capture -skimmer: BLE skimmer detection
         - pineap: PineAP/Evil Twin detection
         """
-        logger.info(f"Serial ESP32 listener starting on {self._serial_port}")
+        logger.warning(f"[wardriving] Serial listener starting on {self._serial_port}")
         try:
             import serial as pyserial
         except ImportError:
@@ -2844,11 +2892,48 @@ class WardrivingEngine:
             (b"pineap\r\n", 10, "pineap"),
         ]
 
+        # poll-based reader so we never hit pyserial's select() path. Ragnar.py
+        # routinely runs with >700 open FDs (ZAP + threads), and pyserial uses
+        # `select.select()` on its abort-pipe — which raises
+        # `ValueError('filedescriptor out of range in select()')` once any FD
+        # in the call exceeds FD_SETSIZE (1024). `select.poll()` has no such
+        # limit. Open serial non-blocking and drive timing via poll().
+        import select as _select_mod
+
         while self._running:
             try:
-                ser = pyserial.Serial(self._serial_port, 460800, timeout=2)
+                ser = pyserial.Serial(self._serial_port, 460800, timeout=0,
+                                       write_timeout=2)
                 self.serial_connected = True
-                logger.info(f"Serial connected: {self._serial_port}")
+                logger.warning(f"[wardriving] Serial connected: {self._serial_port}")
+
+                _poller = _select_mod.poll()
+                _poller.register(ser.fileno(), _select_mod.POLLIN)
+                _line_buf = bytearray()
+
+                def _readline(timeout_s: float) -> bytes:
+                    """Read one \\n-terminated line, blocking up to timeout_s.
+                    Returns b'' if nothing arrives in time. Bypasses pyserial's
+                    select() path."""
+                    deadline = time.time() + timeout_s
+                    while True:
+                        nl = _line_buf.find(b'\n')
+                        if nl >= 0:
+                            line = bytes(_line_buf[:nl + 1])
+                            del _line_buf[:nl + 1]
+                            return line
+                        remaining_ms = int((deadline - time.time()) * 1000)
+                        if remaining_ms <= 0:
+                            return b''
+                        events = _poller.poll(remaining_ms)
+                        if not events:
+                            return b''
+                        try:
+                            chunk = ser.read(ser.in_waiting or 1)
+                        except Exception:
+                            return b''
+                        if chunk:
+                            _line_buf.extend(chunk)
 
                 # Identify companion. Opening pyserial toggles DTR/RTS which
                 # resets the ESP32; Huginn takes ~1.5–2s to boot before it
@@ -2860,6 +2945,7 @@ class WardrivingEngine:
                 self._huginn_handshake_pushed = False
                 try:
                     boot_buf = ''
+                    boot_raw = bytearray()
                     deadline = time.time() + 3.0
                     while time.time() < deadline:
                         try:
@@ -2868,24 +2954,39 @@ class WardrivingEngine:
                             avail = 0
                         if avail:
                             try:
-                                boot_buf += ser.read(avail).decode('utf-8', errors='replace')
+                                chunk = ser.read(avail)
+                                boot_raw += chunk
+                                boot_buf += chunk.decode('utf-8', errors='replace')
                             except Exception:
                                 pass
-                            if 'HuginnESP' in boot_buf or '[CORE]' in boot_buf or 'Piglet' in boot_buf:
+                            if ('HuginnESP' in boot_buf or '[CORE]' in boot_buf
+                                    or 'Piglet' in boot_buf
+                                    or 'WigleWifi-' in boot_buf):
                                 break
                         time.sleep(0.1)
 
                     if 'HuginnESP' in boot_buf or 'huginn' in boot_buf.lower():
                         self._companion_name = 'Huginn'
-                    elif 'Piglet' in boot_buf or '[CORE]' in boot_buf:
+                    elif ('Piglet' in boot_buf or '[CORE]' in boot_buf
+                            or 'WigleWifi-' in boot_buf):
                         self._companion_name = 'Piglet'
                     else:
-                        # No banner — actively probe with `status`.
-                        ser.reset_input_buffer()
-                        ser.write(b"status\r\n")
-                        time.sleep(1.5)
+                        # No banner — actively probe with `status`. Wait via
+                        # poll() then drain whatever arrived (no select()).
                         try:
-                            probe = ser.read(ser.in_waiting or 512).decode('utf-8', errors='replace')
+                            ser.reset_input_buffer()
+                        except Exception:
+                            pass
+                        try:
+                            ser.write(b"status\r\n")
+                        except Exception:
+                            pass
+                        _poller.poll(1500)
+                        probe = ''
+                        try:
+                            avail = ser.in_waiting
+                            if avail:
+                                probe = ser.read(avail).decode('utf-8', errors='replace')
                         except Exception:
                             probe = ''
                         if '{"mode"' in probe or 'HuginnESP' in probe or 'huginn' in probe.lower():
@@ -2894,7 +2995,7 @@ class WardrivingEngine:
                             self._companion_name = 'Piglet'
                         else:
                             self._companion_name = 'Piglet'  # passive CSV fallback
-                    logger.info(f"Companion identified: {self._companion_name}")
+                    logger.warning(f"[wardriving] Companion identified: {self._companion_name} (boot_buf_len={len(boot_buf)})")
 
                     # Rescue any WiGLE header lines from the boot buffer so the
                     # column map gets built before the first data rows arrive.
@@ -2904,7 +3005,7 @@ class WardrivingEngine:
                             if bline:
                                 self._parse_serial_line(bline)
                 except Exception as e:
-                    logger.debug(f"Companion identify error: {e}")
+                    logger.warning(f"[wardriving] Companion identify error: {e!r}")
                     self._companion_name = 'Companion'  # Unknown fallback
 
                 # Push runtime config to Huginn at handshake. Firmware state is
@@ -2917,6 +3018,68 @@ class WardrivingEngine:
                 if self._companion_name == 'Huginn':
                     self._run_huginn_wardrive_loop(ser)
                     ser.close()
+                    continue
+
+                # ── Piglet (incl. standalone Ragnar Core) ────────────────────
+                # The device streams WiGLE CSV continuously regardless of
+                # cycle commands. Sending "stop"/"scanap" is pointless and
+                # actively harmful: when the device's USB OUT endpoint is
+                # saturated with CSV, the host's `ser.write("stop\r\n")` can
+                # stall up to write_timeout and tear down the listener.
+                # Just stay in the read loop forever.
+                if self._companion_name == 'Piglet':
+                    logger.warning("[wardriving] Piglet continuous-read mode")
+                    import os as _os
+                    _rx_lines = 0
+                    _rx_bytes = 0
+                    _last_diag = time.time()
+                    _last_devcheck = time.time()
+                    _sample_lines = []
+                    while self._running:
+                        try:
+                            raw = _readline(2.0)
+                            if raw:
+                                _rx_bytes += len(raw)
+                                _rx_lines += 1
+                                line = raw.decode('utf-8', errors='replace').strip()
+                                if line:
+                                    if len(_sample_lines) < 3:
+                                        _sample_lines.append(line[:120])
+                                    self._parse_serial_line(line)
+                            now_ts = time.time()
+                            # USB hot-unplug detection: when the C6 disconnects
+                            # the device file goes away ("/dev/ttyACM0 (deleted)"
+                            # in lsof) but pyserial's FD stays open and reads
+                            # silently return EOF forever. Check every 5 s that
+                            # the device path still exists, otherwise force a
+                            # reconnect via exception.
+                            if now_ts - _last_devcheck >= 5.0:
+                                _last_devcheck = now_ts
+                                if not _os.path.exists(self._serial_port):
+                                    raise IOError(
+                                        f"{self._serial_port} disappeared "
+                                        "(USB hot-unplug)"
+                                    )
+                            # Periodic diagnostic: every 15 s emit a counter
+                            # so we know whether bytes are arriving at all.
+                            if now_ts - _last_diag >= 15.0:
+                                logger.warning(
+                                    f"[wardriving] Piglet RX last 15s: "
+                                    f"{_rx_lines} lines, {_rx_bytes} bytes; "
+                                    f"sample={_sample_lines}"
+                                )
+                                _rx_lines = 0
+                                _rx_bytes = 0
+                                _sample_lines = []
+                                _last_diag = now_ts
+                        except Exception as e:
+                            logger.warning(f"[wardriving] Piglet read error: {e!r}")
+                            break
+                    try:
+                        ser.close()
+                    except Exception:
+                        pass
+                    logger.warning(f"[wardriving] Piglet loop exited (running={self._running})")
                     continue
 
                 cycle_index = 0
@@ -2935,17 +3098,27 @@ class WardrivingEngine:
                         # the webapp before the next scan starts emitting data.
                         if self._companion_name == 'Huginn':
                             self._drain_huginn_queue(ser)
-                        ser.reset_input_buffer()
+                        # For Piglet (incl. standalone Ragnar Core), the device
+                        # streams WiGLE CSV continuously regardless of cycle
+                        # commands. Flushing the input buffer would discard
+                        # rows mid-stream, so only flush for Huginn.
+                        if self._companion_name == 'Huginn':
+                            ser.reset_input_buffer()
                         ser.write(cmd)
                         logger.debug(f"HuginnESP cmd: {cmd.strip()}")
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"[wardriving] Scan cmd write failed: {e!r}")
                         break
 
-                    # Read output for the duration
+                    # Read output for the duration via poll-based reader
+                    # (avoids pyserial's select() — see _readline definition).
                     end_time = time.time() + duration
                     while self._running and time.time() < end_time:
                         try:
-                            raw = ser.readline()
+                            remaining = end_time - time.time()
+                            if remaining <= 0:
+                                break
+                            raw = _readline(min(remaining, 2.0))
                             if not raw:
                                 continue
                             line = raw.decode('utf-8', errors='replace').strip()
@@ -2953,7 +3126,7 @@ class WardrivingEngine:
                                 continue
                             self._parse_serial_line(line)
                         except Exception as e:
-                            logger.debug(f"Serial read error: {e}")
+                            logger.warning(f"[wardriving] Serial read error: {e!r}")
                             break
 
                     # Flush any buffered multi-line entry
@@ -2969,9 +3142,10 @@ class WardrivingEngine:
                     cycle_index += 1
 
                 ser.close()
+                logger.warning(f"[wardriving] Scan loop exited normally (running={self._running}) — reopening")
             except Exception as e:
                 self.serial_connected = False
-                logger.debug(f"Serial connect failed ({self._serial_port}): {e}")
+                logger.warning(f"[wardriving] Listener iteration died ({self._serial_port}): {e!r}")
                 # Retry every 5 seconds
                 for _ in range(5):
                     if not self._running:
@@ -3039,6 +3213,11 @@ class WardrivingEngine:
         # === Piglet Mesh node tracking ===
         # "[CORE] New ... node N:" or "[CORE] Reassigned: N nodes"
         if line.startswith('[CORE]'):
+            # Surface every [CORE] line at WARNING level so it appears in the
+            # systemd journal. Lets us see standalone-coordinator diagnostics
+            # ("Listening on channel 6", "RX ... from MAC", "New mesh node ...")
+            # without having to detach Ragnar to scope the serial port.
+            logger.warning(f"[Piglet-Core] {line}")
             m = re.search(r'node (\d+):', line)
             if m:
                 self._mesh_node_count = max(self._mesh_node_count, int(m.group(1)))
@@ -3220,6 +3399,41 @@ class WardrivingEngine:
         if line.startswith('{'):
             try:
                 data = json.loads(line)
+
+                # === Coordinator device announce ===
+                # Standalone coordinator firmware emits:
+                # {"device":"RagnarCoord","fw":"...","board":"...","caps":[...]}
+                # Promote companion to "Piglet Coordinator" so the UI can show
+                # the correct role, and skip further parsing (no MAC, no row).
+                if data.get('device') == 'RagnarCoord':
+                    self._companion_name = 'Piglet Coordinator'
+                    self._coordinator_board = data.get('board', '')
+                    self._coordinator_fw    = data.get('fw', '')
+                    return
+
+                # === Per-node status row (coordinator dump every 10 s) ===
+                # {"type":"NODE","idx":0,"mac":"AA:BB:CC:DD:EE:FF","rx":42,"age":3}
+                # Receiving any NODE row is proof we're talking to the
+                # standalone coordinator firmware (only it emits these).
+                # Promote the companion label even if the boot-time
+                # {"device":"RagnarCoord"} announce was missed.
+                if data.get('type') == 'NODE':
+                    if self._companion_name != 'Piglet Coordinator':
+                        self._companion_name = 'Piglet Coordinator'
+                    mac_n = (data.get('mac') or '').upper()
+                    if mac_n:
+                        self._coordinator_nodes[mac_n] = {
+                            'mac':         mac_n,
+                            'idx':         int(data.get('idx', 0)),
+                            'records_rx':  int(data.get('rx', 0)),
+                            'age_s':       int(data.get('age', 0)),
+                            'last_update': time.time(),
+                        }
+                        # Live node count from the coordinator's own table —
+                        # more reliable than waiting for "Reassigned" lines.
+                        self._mesh_node_count = len(self._coordinator_nodes)
+                    return
+
                 mac = data.get('mac', data.get('bssid', '')).upper()
                 if not mac or len(mac) < 12:
                     return

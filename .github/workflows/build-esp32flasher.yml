@@ -1,0 +1,158 @@
+name: Build & Deploy Ragnar Coordinator Flashers (C5 / S3-LCD)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'espnow_bridge_firmware/espnow_bridge_c5/**'
+      - 'espnow_bridge_firmware/espnow_bridge_s3_lcd/**'
+      - 'espnow_bridge_firmware/flasher/**'
+      - '.github/workflows/build-esp32flasher.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install arduino-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+          echo "$PWD/bin" >> $GITHUB_PATH
+
+      - name: Configure arduino-cli and add ESP32 board index
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls \
+            "https://espressif.github.io/arduino-esp32/package_esp32_dev_index.json"
+          arduino-cli core update-index
+
+      - name: Install ESP32 board core
+        run: arduino-cli core install esp32:esp32
+
+      - name: Install Arduino libraries
+        # Arduino_GFX is only needed by the S3 LCD build (Waveshare 480x480
+        # ST7701 panel). C5 is headless and uses no external libs.
+        run: |
+          arduino-cli lib install "GFX Library for Arduino"
+
+      # ───────────────────────── C5 (headless) ─────────────────────────
+      - name: Compile ESP32-C5 Coordinator (headless)
+        # CDCOnBoot=cdc → Serial is HWCDC (USB-Serial-JTAG, /dev/ttyACM0).
+        # PSRAM=enabled because the Waveshare C5 board has 4 MB PSRAM.
+        # default_8MB partition gives 3MB APP, plenty for our firmware.
+        run: |
+          arduino-cli compile \
+            --fqbn "esp32:esp32:esp32c5:CDCOnBoot=cdc,PSRAM=enabled,PartitionScheme=default_8MB" \
+            --export-binaries \
+            "espnow_bridge_firmware/espnow_bridge_c5"
+
+      # ───────────────────────── S3 LCD (display) ──────────────────────
+      - name: Compile ESP32-S3 LCD Coordinator
+        # USBMode=hwcdc keeps Serial on USB-Serial-JTAG (CDC ACM).
+        # PSRAM=opi for the N16R8 OPI PSRAM Waveshare S3-Touch-LCD-4B.
+        run: |
+          arduino-cli compile \
+            --fqbn "esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,PartitionScheme=default_8MB,PSRAM=opi,FlashSize=8M" \
+            --export-binaries \
+            "espnow_bridge_firmware/espnow_bridge_s3_lcd"
+
+      - name: Install esptool
+        run: pip install esptool
+
+      - name: Stage site and merge firmware binaries
+        run: |
+          mkdir -p site/firmware
+
+          # Copy web flasher assets
+          cp -r espnow_bridge_firmware/flasher/. site/
+
+          # Locate boot_app0.bin from the installed ESP32 core
+          BOOT_APP0=$(find ~/.arduino15/packages/esp32 -name boot_app0.bin | head -n 1)
+          if [ -z "$BOOT_APP0" ]; then
+            echo "::error::boot_app0.bin not found in ESP32 core"
+            exit 1
+          fi
+          echo "boot_app0.bin: $BOOT_APP0"
+
+          # ── Merge C5 binary ────────────────────────────────────────────
+          # ESP32-C5 second-stage bootloader lives at flash 0x2000 (NOT 0x0
+          # like S3/C6). --target-offset 0x0 pads the merged file from 0
+          # so the manifest can still flash it at offset 0.
+          C5_BUILD=$(find espnow_bridge_firmware/espnow_bridge_c5/build \
+            -name "espnow_bridge_c5.ino.bin" -printf '%h\n' | head -n 1)
+          if [ -z "$C5_BUILD" ]; then
+            echo "::error::C5 build output not found"
+            exit 1
+          fi
+          echo "C5 build dir: $C5_BUILD"
+          ls -lh "$C5_BUILD/"
+          python -m esptool --chip esp32c5 merge_bin \
+            --output site/firmware/coordinator-c5.bin \
+            --flash_mode dio --flash_freq 80m --flash_size 8MB \
+            --target-offset 0x0 \
+            0x2000  "$C5_BUILD/espnow_bridge_c5.ino.bootloader.bin" \
+            0x8000  "$C5_BUILD/espnow_bridge_c5.ino.partitions.bin" \
+            0xe000  "$BOOT_APP0" \
+            0x10000 "$C5_BUILD/espnow_bridge_c5.ino.bin"
+
+          # ── Merge S3 LCD binary ────────────────────────────────────────
+          S3_BUILD=$(find espnow_bridge_firmware/espnow_bridge_s3_lcd/build \
+            -name "espnow_bridge_s3_lcd.ino.bin" -printf '%h\n' | head -n 1)
+          if [ -z "$S3_BUILD" ]; then
+            echo "::error::S3 LCD build output not found"
+            exit 1
+          fi
+          echo "S3 build dir: $S3_BUILD"
+          ls -lh "$S3_BUILD/"
+          python -m esptool --chip esp32s3 merge_bin \
+            --output site/firmware/coordinator-s3-lcd.bin \
+            --flash_mode dio --flash_freq 80m --flash_size 8MB \
+            --target-offset 0x0 \
+            0x0000  "$S3_BUILD/espnow_bridge_s3_lcd.ino.bootloader.bin" \
+            0x8000  "$S3_BUILD/espnow_bridge_s3_lcd.ino.partitions.bin" \
+            0xe000  "$BOOT_APP0" \
+            0x10000 "$S3_BUILD/espnow_bridge_s3_lcd.ino.bin"
+
+          # Inject build version into manifests
+          VERSION="$(date -u +%-m.%-d).${GITHUB_SHA::7}"
+          echo "Version: $VERSION"
+          if command -v jq &>/dev/null; then
+            for m in manifest-coordinator-c5.json manifest-coordinator-s3-lcd.json; do
+              if [ -f "site/$m" ]; then
+                jq --arg v "$VERSION" '.version = $v' "site/$m" > "site/$m.tmp"
+                mv "site/$m.tmp" "site/$m"
+              fi
+            done
+          fi
+
+          echo "{\"build\":\"$VERSION\",\"sha\":\"${GITHUB_SHA::7}\",\"date\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
+            > site/version.json
+
+          echo "=== Firmware binaries ==="
+          ls -lh site/firmware/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

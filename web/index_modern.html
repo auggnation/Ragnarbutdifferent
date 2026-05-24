@@ -3882,16 +3882,27 @@
                     <span id="wd-esp-port" class="text-xs text-gray-400"></span>
                     <span id="wd-esp-status-dot" class="w-2 h-2 rounded-full bg-gray-500"></span>
                     <span id="wd-esp-details" class="contents">
+                        <span id="wd-esp-mode-wrapper" class="contents">
+                            <span class="text-xs text-gray-500">|</span>
+                            <span class="text-xs text-gray-400">Mode:</span>
+                            <span id="wd-esp-mode" class="text-xs font-bold text-amber-400"></span>
+                        </span>
                         <span class="text-xs text-gray-500">|</span>
-                        <span class="text-xs text-gray-400">Mode:</span>
-                        <span id="wd-esp-mode" class="text-xs font-bold text-amber-400"></span>
-                        <span class="text-xs text-gray-500">|</span>
-                        <span class="text-xs text-gray-400">WiFi:</span>
+                        <span id="wd-esp-net-label" class="text-xs text-gray-400">WiFi:</span>
                         <span id="wd-esp-net-count" class="text-xs font-bold text-emerald-400">0</span>
-                        <span class="text-xs text-gray-400">BLE:</span>
-                        <span id="wd-esp-ble-count" class="text-xs font-bold text-blue-400">0</span>
-                        <span class="text-xs text-gray-400">Unique:</span>
-                        <span id="wd-esp-unique" class="text-xs font-bold text-cyan-400">0</span>
+                        <span id="wd-esp-coord-wifi-wrapper" class="contents hidden">
+                            <span class="text-xs text-gray-500">|</span>
+                            <span class="text-xs text-gray-400">WiFi:</span>
+                            <span id="wd-esp-coord-wifi-count" class="text-xs font-bold text-emerald-400">0</span>
+                        </span>
+                        <span id="wd-esp-ble-wrapper" class="contents">
+                            <span class="text-xs text-gray-400">BLE:</span>
+                            <span id="wd-esp-ble-count" class="text-xs font-bold text-blue-400">0</span>
+                        </span>
+                        <span id="wd-esp-unique-wrapper" class="contents">
+                            <span class="text-xs text-gray-400">Unique:</span>
+                            <span id="wd-esp-unique" class="text-xs font-bold text-cyan-400">0</span>
+                        </span>
                         <span id="wd-esp-mesh-wrapper" class="contents hidden">
                             <span class="text-xs text-gray-500">|</span>
                             <span class="text-xs text-gray-400">Mesh:</span>
@@ -3900,6 +3911,16 @@
                         </span>
                     </span>
                     <span id="wd-esp-alerts" class="hidden text-xs font-bold text-red-400 ml-2"></span>
+                </div>
+
+                <!-- Piglet Coordinator: per-node breakdown -->
+                <div id="wd-coord-nodes-bar" class="hidden bg-slate-800/30 border border-slate-700 rounded-lg px-4 py-2 mb-4">
+                    <div class="flex items-center gap-2 mb-2">
+                        <span class="text-xs font-bold text-orange-400">🌐 Mesh nodes</span>
+                        <span id="wd-coord-nodes-count" class="text-xs text-gray-400">0 connected</span>
+                        <span id="wd-coord-board" class="text-xs text-gray-500 ml-auto"></span>
+                    </div>
+                    <div id="wd-coord-nodes-list" class="flex flex-wrap gap-2"></div>
                 </div>
 
                 <!-- WiFi Adapters Status Bar -->
@@ -5034,7 +5055,7 @@
     </div>
 
     <!-- JavaScript -->
-    <script src="/web/scripts/ragnar_modern.js?v=20260520b"></script>
+    <script src="/web/scripts/ragnar_modern.js?v=20260524a"></script>
 
 </body>
 </html>
