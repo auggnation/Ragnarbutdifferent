@@ -10,8 +10,8 @@ Ragnar supports **five operating modes**, in any combination — all five can ru
 |---|------|----------|--------------|
 | 1 | **Standalone wardriver** | Raspberry Pi (or PC) with its built-in Wi-Fi and/or one or more USB Wi-Fi adapters | WiFi scanning via `iw`, multi-adapter antenna coverage |
 | 2 | **+ HuginnESP (USB)** | ESP32-S3-Touch-LCD-4B running [HuginnESP](https://github.com/PierreGode/HuginnESP) | Real-time WiFi + BLE + AirTag/Flipper/skimmer/pineapple detection |
-| 3 | **+ Piglet (USB)** | Any [Piglet](https://github.com/Hamspiced/piglet) board (XIAO ESP32-S3/C5/C6, LilyGo T-Dongle C5) Works only with my fork till tested and aprooved by [Hamspiced](https://github.com/Hamspiced/), flash [here](https://pierregode.github.io/piglet/) | Live WiGLE-CSV stream over serial — no SD-card round-trip |
-| 4 | **+ Piglet Coordinator (USB)** | Dedicated coordinator firmware on a Waveshare ESP32-C5-WIFI6-KIT *or* ESP32-S3-Touch-LCD-4B | Receives records from a fleet of Piglet mesh nodes over ESP-Now and forwards them to Ragnar live |
+| 3 | **+ Piglet (USB)** | Any [Piglet](https://github.com/Hamspiced/piglet) board (XIAO ESP32-S3/C5/C6, LilyGo T-Dongle C5) Works only with my fork till tested and aprooved by [Hamspiced](https://github.com/Hamspiced/), flash [here](https://pierregode.github.io/piglet/) | Live WiGLE-CSV stream over serial |
+| 4 | **+ Piglet Coordinator (USB)** | Dedicated [Coordinator](https://pierregode.github.io/Ragnar/) firmware on a Waveshare ESP32-C5 *or* ESP32-S3-Touch-LCD-4B | Receives records from a fleet of Piglet mesh nodes over ESP-Now and forwards them to Ragnar live |
 | 5 | **+ Piglet Core (USB)** | A regular Piglet board running mesh `core` mode, tethered to Ragnar | Same idea as #4 but on a standard Piglet — the Core scans locally *and* aggregates its mesh nodes, streaming the combined feed to Ragnar |
 
 Modes 1+2, 1+3, 1+4, 1+5 are all common. Modes 4 and 5 are alternative coordinator implementations — pick whichever hardware you have. All four serial companions are auto-detected on the same `/dev/ttyACM*` paths; Ragnar identifies which one is on the wire from its boot banner.
