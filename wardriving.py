@@ -3436,6 +3436,27 @@ class WardrivingEngine:
 
                 mac = data.get('mac', data.get('bssid', '')).upper()
                 if not mac or len(mac) < 12:
+                    # GPS-only telemetry from the companion. Some Piglet
+                    # builds emit standalone fixes like:
+                    #   {"type":"GPS","lat":..,"lon":..,"alt":..,"sats":..}
+                    # No MAC → not a network/BT row, but the position is
+                    # still useful for Ragnar's own scans + gps_track log.
+                    if self._gps is not None:
+                        try:
+                            elat = data.get('lat', data.get('latitude'))
+                            elon = data.get('lon', data.get('longitude'))
+                            ealt = data.get('alt', data.get('altitude'))
+                            esats = data.get('sats', data.get('satellites'))
+                            espeed = data.get('speed_kmh', data.get('speed'))
+                            ehdop = data.get('hdop')
+                            if elat is not None and elon is not None:
+                                self._gps.update_external_fix(
+                                    elat, elon, ealt,
+                                    speed_kmh=espeed, satellites=esats, hdop=ehdop,
+                                    source=self._companion_name or 'companion'
+                                )
+                        except Exception:
+                            pass
                     return
                 ssid = data.get('ssid', data.get('name', ''))
                 rssi = int(data.get('rssi', data.get('signal', -80)))
@@ -3470,6 +3491,12 @@ class WardrivingEngine:
                     )
                     if is_new:
                         self.serial_networks += 1
+                # Adopt the companion's GPS fix when Ragnar has no local
+                # receiver (or the local one is stale). Falls back silently
+                # if the companion reports the 0.0/0.0 sentinel.
+                if lat is not None and lon is not None and self._gps is not None:
+                    self._gps.update_external_fix(lat, lon, alt,
+                                                   source=self._companion_name or 'companion')
                 return
             except (json.JSONDecodeError, ValueError):
                 pass
@@ -3646,6 +3673,15 @@ class WardrivingEngine:
             lat = gps_lat
             lon = gps_lon
             alt = gps_alt
+
+        # If the companion actually has a fix (non-zero lat/lon parsed from
+        # its WiGLE row), adopt it as Ragnar's position. Lets us wardrive
+        # GPS-tagged even with no GPS receiver on the Pi itself.
+        if (lat is not None and lon is not None
+                and not (lat == 0.0 and lon == 0.0)
+                and self._gps is not None):
+            self._gps.update_external_fix(lat, lon, alt,
+                                          source=self._companion_name or 'companion')
 
         record_type = (_field('type') or 'WIFI').upper()
 

@@ -235,6 +235,11 @@ class GPSManager:
         self._gsv_by_talker = {}
         self.connected = False
         self.error = None
+        # Tracks whether the current position came from an external source
+        # (e.g. a USB-connected Piglet companion reporting its own GPS).
+        # Set by update_external_fix(); cleared once a local receiver
+        # produces a real fix.
+        self._external_source = None
 
     def start(self):
         """Start GPS reading thread."""
@@ -335,9 +340,15 @@ class GPSManager:
     def get_status(self):
         """Return full GPS status dict."""
         with self._lock:
+            if self._external_source:
+                source = self._external_source
+            elif self._use_gpsd:
+                source = 'gpsd'
+            else:
+                source = 'serial'
             return {
                 'connected': self.connected,
-                'source': 'gpsd' if self._use_gpsd else 'serial',
+                'source': source,
                 'port': self.port,
                 'has_fix': self.has_fix(),
                 'fix_quality': self.fix_quality,
@@ -354,6 +365,70 @@ class GPSManager:
                 'last_sentence': self.last_sentence,
                 'error': self.error
             }
+
+    def update_external_fix(self, lat, lon, alt=None, speed_kmh=None,
+                            satellites=None, hdop=None, source='companion'):
+        """Inject a position from an external source (e.g. a USB-connected
+        Piglet/HuginnESP companion that has its own GPS receiver).
+
+        Lets Ragnar operate as if it had GPS even when no local receiver is
+        attached, so BT/cell scans, the gps_track table, and the status UI
+        all see a position. A local receiver always wins: if NMEA from the
+        directly-attached GPS arrived within the last 5 s we ignore the
+        external update.
+        """
+        if lat is None or lon is None:
+            return False
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except (TypeError, ValueError):
+            return False
+        # Reject the "no fix yet" sentinel many modules emit (0.0, 0.0 is
+        # in the Gulf of Guinea — practically never a real wardriving fix).
+        if lat == 0.0 and lon == 0.0:
+            return False
+        now = time.time()
+        # Prefer a fresh local fix over an external one. Only skip when the
+        # current state actually came from a local receiver (NMEA/gpsd) —
+        # otherwise back-to-back external updates would block each other.
+        if (self._external_source is None
+                and (self._serial is not None or self._gpsd_sock is not None)
+                and self.last_update
+                and (now - self.last_update) < 5
+                and self.fix_quality > 0):
+            return False
+        with self._lock:
+            self.latitude = lat
+            self.longitude = lon
+            if alt is not None:
+                try:
+                    self.altitude = float(alt)
+                except (TypeError, ValueError):
+                    pass
+            if speed_kmh is not None:
+                try:
+                    self.speed_kmh = float(speed_kmh)
+                except (TypeError, ValueError):
+                    pass
+            if satellites is not None:
+                try:
+                    self.satellites = int(satellites)
+                except (TypeError, ValueError):
+                    pass
+            if hdop is not None:
+                try:
+                    self.hdop = float(hdop)
+                except (TypeError, ValueError):
+                    pass
+            if self.fix_quality <= 0:
+                self.fix_quality = 1
+            self.last_update = now
+            self.last_sentence = now
+            self.connected = True
+            self.error = None
+            self._external_source = source
+        return True
 
     def _read_loop_gpsd(self):
         """Background thread: read JSON objects from gpsd and parse position."""
@@ -427,6 +502,7 @@ class GPSManager:
                 self.fix_quality = 2 if status == 2 else 1
                 self.hdop = obj.get('hdop') or self.hdop
                 self.last_update = now
+                self._external_source = None
             else:
                 self.fix_quality = 0
             self.last_sentence = now
@@ -544,6 +620,7 @@ class GPSManager:
                     pass
                 self.last_update = now
                 self.last_sentence = now
+                self._external_source = None
             return
 
         # RMC — position + speed + course
@@ -567,6 +644,7 @@ class GPSManager:
                         pass
                     self.last_update = now
                     self.last_sentence = now
+                    self._external_source = None
             else:
                 with self._lock:
                     self.last_sentence = now
