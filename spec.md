@@ -78,8 +78,8 @@
 - Failures (missing binary, timeout) logged with guidance to install `arp-scan` or widen sudo privileges.
 
 ### 5.3 Ping Sweep
-- Targets missing from ARP results across configured CIDRs (default `192.168.1.0/24`, user-addable via config or UI).
-- Priority list (default `192.168.1.192`, user-configurable) pinged with 3 attempts, 3 s timeout before general sweep (single ping, 2 s wait). Purpose: ensure crown-jewel host stays monitored even if stealthy.
+- Targets missing from ARP results across configured CIDRs. CIDR defaults to the result of `get_network()` (parses `ip route` / `ip addr show` / netifaces) — no static fallback subnet; if detection fails, the sweep is skipped with an error logged.
+- Priority list is empty by default. Callers can pass a custom list of crown-jewel IPs to `_ping_sweep_missing_hosts(priority_targets=...)` for guaranteed coverage with 3 attempts × 3 s timeout before the general sweep.
 - Missing MACs create temporary pseudo-MACs (`00:00:<ip octets>`) until reconciled in `update_netkb()` with real data; DB marks them `is_pseudo=1`.
 - Threaded execution honors `network_max_failed_pings`, `mac_scan_blacklist`, and `ip_scan_blacklist`. Workers limited to `host_scan_workers` (default 4).
 - Summary stats (hosts seen, time taken) logged for e-paper and AI ingestion.

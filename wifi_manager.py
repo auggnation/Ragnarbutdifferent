@@ -96,6 +96,16 @@ class WiFiManager:
         self._last_ping_sweep_time = 0
         self._last_ping_sweep_ssid = None
         self.ping_sweep_cooldown = shared_data.config.get('wifi_ping_sweep_cooldown', 120)
+
+        # SSID-change debounce: a transient SSID misread (roaming, dual-band
+        # flap, brief disconnect) used to flip the storage layer and trigger
+        # mark_all_hosts_degraded(), wiping every alive host. Require the
+        # NEW SSID to be observed consistently for this many seconds before
+        # propagating to shared_data.set_active_network().
+        self.ssid_change_debounce_s = shared_data.config.get(
+            'wifi_ssid_change_debounce_seconds', 30)
+        self._pending_ssid_change = None
+        self._pending_ssid_first_seen = 0.0
         # Failsafe cycle tracking (cycles with no WiFi and no AP clients)
         # This counter tracks prolonged disconnections (>5 minutes each) to prevent endless loops
         # It will only trigger a reboot after many consecutive long-term failures
@@ -272,13 +282,66 @@ class WiFiManager:
         return final_networks
 
     def _set_current_ssid(self, ssid):
-        """Update current SSID and notify shared storage manager."""
+        """Update current SSID and propagate to storage with debounce.
+
+        First-time establishment (no active network yet) propagates immediately
+        so the per-network DB switches before the next scan cycle. Subsequent
+        *changes* between known SSIDs are debounced: a transient misread of
+        the SSID (common during roaming on Pi Zero) used to trip
+        mark_all_hosts_degraded() and wipe the entire target list.
+        """
         self.current_ssid = ssid
-        if hasattr(self.shared_data, 'set_active_network'):
-            try:
-                self.shared_data.set_active_network(ssid)
-            except Exception as exc:
-                self.logger.warning(f"Failed to propagate network change to storage manager: {exc}")
+
+        if not hasattr(self.shared_data, 'set_active_network'):
+            return
+
+        active_ssid = getattr(self.shared_data, 'active_network_ssid', None)
+
+        # Same SSID as what storage already considers active → clear pending.
+        if ssid == active_ssid:
+            if self._pending_ssid_change is not None:
+                self.logger.debug(
+                    f"SSID change to {self._pending_ssid_change} aborted "
+                    f"(reverted to {active_ssid})")
+            self._pending_ssid_change = None
+            self._pending_ssid_first_seen = 0.0
+            return
+
+        # Fresh establishment from no active network → propagate immediately.
+        if not active_ssid:
+            self._propagate_active_network(ssid)
+            return
+
+        # Real change from one SSID to another → debounce.
+        now = time.time()
+        if self._pending_ssid_change != ssid:
+            self._pending_ssid_change = ssid
+            self._pending_ssid_first_seen = now
+            self.logger.info(
+                f"SSID change observed: {active_ssid!r} -> {ssid!r}, "
+                f"debouncing {self.ssid_change_debounce_s}s before switching "
+                f"network storage")
+            return
+
+        elapsed = now - self._pending_ssid_first_seen
+        if elapsed < self.ssid_change_debounce_s:
+            self.logger.debug(
+                f"SSID {ssid!r} pending {elapsed:.1f}/"
+                f"{self.ssid_change_debounce_s}s")
+            return
+
+        self.logger.info(
+            f"SSID {ssid!r} confirmed after {elapsed:.1f}s — switching storage")
+        self._propagate_active_network(ssid)
+        self._pending_ssid_change = None
+        self._pending_ssid_first_seen = 0.0
+
+    def _propagate_active_network(self, ssid):
+        try:
+            self.shared_data.set_active_network(ssid)
+        except Exception as exc:
+            self.logger.warning(
+                f"Failed to propagate network change to storage manager: {exc}")
 
     def _trigger_initial_ping_sweep(self, ssid):
         """Schedule a post-connection ping sweep to refresh network data."""

@@ -243,12 +243,19 @@ class NetworkScanner:
 
     def run_arp_scan(self, network=None):
         """Execute arp-scan to get MAC addresses and vendor information for local network hosts."""
-        # Try both --localnet and explicit subnet scanning for comprehensive MAC discovery
-        subnet = str(network) if network else '192.168.1.0/24'
+        if network is None:
+            network = self.get_network()
         commands = [
             ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', '--localnet'],
-            ['sudo', 'arp-scan', f'--interface={self.arp_scan_interface}', subnet]
         ]
+        if network is not None:
+            commands.append(
+                ['sudo', 'arp-scan',
+                 f'--interface={self.arp_scan_interface}', str(network)])
+        else:
+            self.logger.warning(
+                "run_arp_scan: no explicit subnet and detection failed; "
+                "falling back to --localnet only")
         
         all_hosts = {}
         
@@ -441,11 +448,17 @@ class NetworkScanner:
         known_ips = set(arp_hosts.keys())
 
         if not target_cidrs:
-            target_cidrs = ['192.168.1.0/24']
+            detected = self.get_network()
+            if detected is not None:
+                target_cidrs = [str(detected)]
+            else:
+                self.logger.error(
+                    "_ping_sweep_missing_hosts: no target CIDR and network "
+                    "detection failed — skipping ping sweep")
+                return ping_discovered
 
-        # CRITICAL TARGET: Always ensure 192.168.1.192 is checked explicitly unless overridden
         if priority_targets is None:
-            priority_targets = ['192.168.1.192']
+            priority_targets = []
 
         self.logger.info(f"🔍 Starting ping sweep - ARP found {len(arp_hosts)} hosts, checking {254} additional IPs")
 
@@ -586,7 +599,10 @@ class NetworkScanner:
                 if network:
                     target_cidrs.append(str(network))
                 else:
-                    target_cidrs.append('192.168.1.0/24')
+                    self.logger.error(
+                        "Initial ping sweep aborted: no target CIDR and "
+                        "network detection failed")
+                    return {}
 
             self.logger.info(f"🚀 Initial ping sweep requested across {', '.join(target_cidrs)}")
             arp_hosts = self.run_arp_scan(network=network) if include_arp_scan else {}
@@ -940,10 +956,11 @@ class NetworkScanner:
                                 return network
                 except Exception as e:
                     self.logger.warning(f"Failed to detect any network: {e}")
-                self.logger.warning("netifaces not available, using default network range")
-                network = ipaddress.IPv4Network("192.168.1.0/24", strict=False)
-                self.logger.info(f"Network (default): {network}")
-                return network
+                self.logger.error(
+                    "Unable to detect local network — netifaces missing and "
+                    "'ip' command output could not be parsed. Caller must "
+                    "supply an explicit CIDR.")
+                return None
                 
             gws = netifaces.gateways()
             default_gateway = gws['default'][netifaces.AF_INET][1]

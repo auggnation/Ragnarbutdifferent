@@ -25,6 +25,7 @@ import signal
 import queue
 import logging
 import statistics
+import ipaddress
 from typing import Dict, List, Optional, Any, Callable, Tuple
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
@@ -123,6 +124,8 @@ class HostTrafficStats:
     bytes_out: int = 0
     protocols: Dict[str, int] = field(default_factory=dict)
     ports_contacted: set = field(default_factory=set)
+    ports_targeted: set = field(default_factory=set)
+    sweep_targets: Dict[int, set] = field(default_factory=dict)
     connections_active: int = 0
     first_seen: datetime = field(default_factory=datetime.now)
     last_seen: datetime = field(default_factory=datetime.now)
@@ -141,6 +144,7 @@ class HostTrafficStats:
             'bytes_out': self.bytes_out,
             'protocols': self.protocols,
             'ports_contacted': list(self.ports_contacted)[:100],  # Limit for API
+            'ports_targeted': list(self.ports_targeted)[:100],
             'connections_active': self.connections_active,
             'first_seen': self.first_seen.isoformat(),
             'last_seen': self.last_seen.isoformat(),
@@ -215,6 +219,59 @@ class TrafficAnalyzer:
         5355,  # LLMNR
     })
 
+    # Service source ports: when a packet's src_port is one of these, the
+    # dst_port is a client's ephemeral socket (response), not a scan target.
+    SERVICE_SOURCE_PORTS = frozenset({
+        53, 67, 68, 69, 80, 443, 88, 123,
+        137, 138, 139, 161, 162, 389, 636,
+        445, 25, 465, 587, 514, 546, 547,
+        993, 995, 1900, 5353, 5355, 8080, 8443,
+    })
+
+    # High-value reconnaissance targets >1024. These always count as
+    # "targeted" even if src_port looks like a service port — closes the
+    # `nmap -g 53` evasion against common DB/admin/orchestrator ports.
+    HIGH_VALUE_HIGH_PORTS = frozenset({
+        1433, 1521,             # MS-SQL, Oracle
+        2375, 2376,             # Docker (TLS)
+        2379, 2380,             # etcd
+        3306,                   # MySQL
+        3389,                   # RDP
+        5432,                   # Postgres
+        5601,                   # Kibana
+        5672, 15672,            # RabbitMQ + management
+        5900, 5901,             # VNC
+        5984,                   # CouchDB
+        5985, 5986,             # WinRM
+        6379,                   # Redis
+        7474, 7687,             # Neo4j
+        8000, 8008, 8086,       # Common admin / InfluxDB
+        8080, 8443, 8888,       # HTTP-alt / admin
+        9000, 9090, 9091,       # Grafana, Prometheus
+        9042,                   # Cassandra
+        9092,                   # Kafka
+        9200, 9300,             # Elasticsearch
+        11211,                  # memcached
+        27017, 27018,           # MongoDB
+    })
+
+    PORTSCAN_LOW_PORT_THRESHOLD = 20
+    PORTSCAN_TOTAL_THRESHOLD = 150
+    PORTSCAN_EPHEMERAL_FLOOR = 1024
+    PORTSCAN_GATEWAY_MULTIPLIER = 5      # softer threshold for default gateway
+
+    # Horizontal sweep: same port across many distinct destination hosts.
+    SWEEP_HOST_THRESHOLD = 10            # distinct dst IPs on one port
+    SWEEP_MAX_TRACKED_PORTS = 200        # cap memory per source host
+    SWEEP_MAX_TRACKED_IPS = 500          # cap memory per port
+
+    # Passive host discovery: periodically flush observed LAN hosts into the
+    # hosts DB so traffic-only hosts (firewalled, never scanned) get tracked.
+    PASSIVE_SYNC_INTERVAL = 30.0         # seconds between DB flushes
+    PASSIVE_MIN_PACKETS = 5              # min packets to upsert if no MAC yet
+    PASSIVE_MAX_LISTEN_PORTS = 100       # cap per host
+    PASSIVE_LAN_PREFIX = 24              # /24 around each known local/gateway IP
+
     # Rate limiting
     MAX_ALERTS_PER_MINUTE = 10
     STATS_RETENTION_HOURS = 24
@@ -233,6 +290,21 @@ class TrafficAnalyzer:
         
         # Local IP addresses to exclude from alerts (Ragnar's own IPs)
         self._local_ips: set = self._detect_local_ips()
+
+        # Default gateway IPs: exempt from port-scan heuristic.
+        self._gateway_ips: set = self._detect_gateway_ips()
+
+        # LAN networks for passive host discovery (derived from local+gateway IPs).
+        self._lan_networks: List[ipaddress.IPv4Network] = self._derive_lan_networks()
+
+        # Passive discovery state:
+        # _mac_by_ip: IP -> MAC (from ARP replies)
+        # _listening_ports: IP -> set of service ports it appears to serve
+        # _hostname_by_ip: IP -> hostname (from observed DNS replies)
+        self._mac_by_ip: Dict[str, str] = {}
+        self._listening_ports: Dict[str, set] = {}
+        self._hostname_by_ip: Dict[str, str] = {}
+        self._last_passive_sync: float = time.time()
         
         # Statistics storage
         self.host_stats: Dict[str, HostTrafficStats] = {}
@@ -378,7 +450,63 @@ class TrafficAnalyzer:
 
         logger.info(f"Local IPs (excluded from alerts): {local_ips}")
         return local_ips
-    
+
+    def _detect_gateway_ips(self) -> set:
+        gateways: set = set()
+        try:
+            result = subprocess.run(
+                ['ip', 'route', 'show', 'default'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                for match in re.finditer(
+                    r'default\s+via\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})',
+                    result.stdout
+                ):
+                    gateways.add(match.group(1))
+        except Exception as e:
+            logger.debug(f"Gateway detection error: {e}")
+        if gateways:
+            logger.info(f"Default gateway(s) (port-scan exempt): {gateways}")
+        return gateways
+
+    def _derive_lan_networks(self) -> List[ipaddress.IPv4Network]:
+        nets: set = set()
+        candidates: set = set()
+        candidates.update(getattr(self, '_local_ips', set()) or set())
+        candidates.update(getattr(self, '_gateway_ips', set()) or set())
+        for ip in candidates:
+            try:
+                addr = ipaddress.IPv4Address(ip)
+            except (ValueError, ipaddress.AddressValueError):
+                continue
+            if addr.is_loopback or addr.is_link_local or addr.is_multicast:
+                continue
+            try:
+                net = ipaddress.IPv4Network(
+                    f"{ip}/{self.PASSIVE_LAN_PREFIX}", strict=False)
+                nets.add(net)
+            except (ValueError, ipaddress.NetmaskValueError):
+                continue
+        result = sorted(nets, key=lambda n: int(n.network_address))
+        if result:
+            logger.info(f"LAN networks for passive discovery: "
+                        f"{[str(n) for n in result]}")
+        return result
+
+    def _is_lan_ip(self, ip: str) -> bool:
+        if not ip:
+            return False
+        try:
+            addr = ipaddress.IPv4Address(ip)
+        except (ValueError, ipaddress.AddressValueError):
+            return False
+        if addr.is_loopback or addr.is_link_local or addr.is_multicast:
+            return False
+        if int(addr) == 0 or int(addr) == 0xFFFFFFFF:
+            return False
+        return any(addr in net for net in self._lan_networks)
+
     def is_available(self) -> bool:
         """Check if traffic analysis is available"""
         return get_server_capabilities().capabilities.traffic_analysis_enabled
@@ -547,7 +675,15 @@ class TrafficAnalyzer:
 
                 # Periodically score flows for beacon behaviour
                 self._sweep_beacons()
-                    
+
+                # Periodically flush passive host discoveries to the DB
+                if time.time() - self._last_passive_sync >= self.PASSIVE_SYNC_INTERVAL:
+                    try:
+                        self._passive_sync_to_db()
+                    except Exception as exc:
+                        logger.debug(f"Passive host sync error: {exc}")
+                    self._last_passive_sync = time.time()
+
             except Exception as e:
                 logger.error(f"Analysis error: {e}")
     
@@ -593,7 +729,12 @@ class TrafficAnalyzer:
                     protocol = 'udp'
                 else:
                     protocol = 'other'
-            
+
+            # ARP harvesting: pull IP↔MAC mappings for passive host discovery.
+            if protocol == 'arp':
+                self._parse_arp_line(line)
+                return
+
             # Extract IP addresses with regex - more flexible
             # Match patterns like: 192.168.1.100.443 or 192.168.1.100
             ip_pattern = r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?:\.(\d+))?'
@@ -619,12 +760,24 @@ class TrafficAnalyzer:
             # Update global stats  
             self.total_bytes += packet_size
             
-            # Update host stats
-            self._update_host_stats(src_ip, 'out', packet_size, protocol, dst_port)
-            self._update_host_stats(dst_ip, 'in', packet_size, protocol, src_port)
-            
-            # Update connection tracking
+            # Flow-direction inference: if we've already seen the reverse
+            # flow, this packet is a response (the src_ip is the responder).
             conn_key = f"{src_ip}:{src_port}->{dst_ip}:{dst_port}"
+            reverse_key = f"{dst_ip}:{dst_port}->{src_ip}:{src_port}"
+            is_response_flow = (reverse_key in self.connections
+                                and conn_key not in self.connections)
+
+            # Update host stats
+            self._update_host_stats(src_ip, 'out', packet_size, protocol,
+                                    my_port=src_port, peer_port=dst_port,
+                                    peer_ip=dst_ip,
+                                    is_response_flow=is_response_flow)
+            self._update_host_stats(dst_ip, 'in', packet_size, protocol,
+                                    my_port=dst_port, peer_port=src_port,
+                                    peer_ip=src_ip,
+                                    is_response_flow=False)
+
+            # Update connection tracking
             if conn_key not in self.connections:
                 self.connections[conn_key] = ConnectionStats(
                     src_ip=src_ip, dst_ip=dst_ip,
@@ -636,6 +789,10 @@ class TrafficAnalyzer:
             conn.bytes_sent += packet_size
             conn.last_seen = datetime.now()
             
+            # Record listening ports (a host using a service port = listener).
+            self._record_listening_port(src_ip, src_port)
+            self._record_listening_port(dst_ip, dst_port)
+
             # Check for suspicious patterns
             self._check_suspicious_patterns(src_ip, dst_ip, src_port, dst_port, protocol)
 
@@ -658,29 +815,66 @@ class TrafficAnalyzer:
         except Exception as e:
             logger.debug(f"Packet parse error: {e}")
     
-    def _update_host_stats(self, ip: str, direction: str, size: int, protocol: str, port: int):
-        """Update statistics for a host"""
+    def _update_host_stats(self, ip: str, direction: str, size: int, protocol: str,
+                           my_port: int, peer_port: int,
+                           peer_ip: str = '',
+                           is_response_flow: bool = False):
+        """Update statistics for a host.
+
+        ports_contacted: every peer-port this host's traffic involved (UI view).
+        ports_targeted: only peer-ports this host actively initiated to.
+        sweep_targets: per-port set of distinct dst-IPs this host initiated to,
+            used for horizontal-sweep detection.
+        """
         if ip not in self.host_stats:
             self.host_stats[ip] = HostTrafficStats(ip=ip)
-        
+
         stats = self.host_stats[ip]
         stats.total_packets += 1
         stats.total_bytes += size
         stats.last_seen = datetime.now()
-        
+
         if direction == 'in':
             stats.packets_in += 1
             stats.bytes_in += size
         else:
             stats.packets_out += 1
             stats.bytes_out += size
-        
-        # Protocol tracking
+
         stats.protocols[protocol] = stats.protocols.get(protocol, 0) + 1
-        
-        # Port tracking (limit to prevent memory bloat)
-        if len(stats.ports_contacted) < 1000:
-            stats.ports_contacted.add(port)
+
+        if peer_port and len(stats.ports_contacted) < 1000:
+            stats.ports_contacted.add(peer_port)
+
+        if (direction == 'out'
+                and peer_port
+                and not is_response_flow
+                and not self._looks_like_response(my_port, peer_port)):
+            if len(stats.ports_targeted) < 1000:
+                stats.ports_targeted.add(peer_port)
+
+            if peer_ip and self._is_sweep_relevant_port(peer_port):
+                bucket = stats.sweep_targets.get(peer_port)
+                if bucket is None:
+                    if len(stats.sweep_targets) >= self.SWEEP_MAX_TRACKED_PORTS:
+                        return
+                    bucket = set()
+                    stats.sweep_targets[peer_port] = bucket
+                if len(bucket) < self.SWEEP_MAX_TRACKED_IPS:
+                    bucket.add(peer_ip)
+
+    def _is_sweep_relevant_port(self, port: int) -> bool:
+        if port <= 0:
+            return False
+        if port < self.PORTSCAN_EPHEMERAL_FLOOR:
+            return True
+        return port in self.HIGH_VALUE_HIGH_PORTS
+
+    def _looks_like_response(self, my_port: int, peer_port: int) -> bool:
+        if peer_port in self.HIGH_VALUE_HIGH_PORTS:
+            return False
+        return (my_port in self.SERVICE_SOURCE_PORTS
+                and peer_port >= self.PORTSCAN_EPHEMERAL_FLOOR)
     
     def _record_dns_query(self, line: str, src_ip: str, dst_ip: str):
         """Record DNS queries for analysis and check for tunneling"""
@@ -700,7 +894,165 @@ class TrafficAnalyzer:
         # Check for DNS tunneling (high query rate)
         if src_ip not in self._local_ips:
             self._check_dns_tunneling(src_ip)
-    
+
+    _ARP_REPLY_RE = re.compile(
+        r'ARP,\s+Reply\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+is-at\s+'
+        r'([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})'
+    )
+    _ARP_AT_RE = re.compile(
+        r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+is-at\s+'
+        r'([0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5})'
+    )
+
+    def _parse_arp_line(self, line: str):
+        match = self._ARP_REPLY_RE.search(line) or self._ARP_AT_RE.search(line)
+        if not match:
+            return
+        ip, mac = match.group(1), match.group(2).lower()
+        if not self._is_lan_ip(ip):
+            return
+        self._mac_by_ip[ip] = mac
+        if ip not in self.host_stats:
+            self.host_stats[ip] = HostTrafficStats(ip=ip, mac=mac)
+        elif not self.host_stats[ip].mac:
+            self.host_stats[ip].mac = mac
+
+    def _record_listening_port(self, ip: str, port: int):
+        if not ip or not port or port <= 0:
+            return
+        # A host using a service port (<1024 or high-value) = it's a listener.
+        if port >= self.PORTSCAN_EPHEMERAL_FLOOR and port not in self.HIGH_VALUE_HIGH_PORTS:
+            return
+        if not self._is_lan_ip(ip):
+            return
+        bucket = self._listening_ports.setdefault(ip, set())
+        if len(bucket) < self.PASSIVE_MAX_LISTEN_PORTS:
+            bucket.add(port)
+
+    # Port -> well-known service name for `services` column enrichment.
+    PORT_SERVICE_NAMES = {
+        20: 'ftp-data', 21: 'ftp', 22: 'ssh', 23: 'telnet', 25: 'smtp',
+        53: 'dns', 67: 'dhcp-server', 68: 'dhcp-client', 80: 'http',
+        110: 'pop3', 123: 'ntp', 135: 'msrpc', 137: 'netbios-ns',
+        138: 'netbios-dgm', 139: 'netbios-ssn', 143: 'imap', 161: 'snmp',
+        162: 'snmptrap', 389: 'ldap', 443: 'https', 445: 'smb',
+        465: 'smtps', 514: 'syslog', 587: 'submission', 636: 'ldaps',
+        993: 'imaps', 995: 'pop3s', 1433: 'mssql', 1521: 'oracle',
+        2375: 'docker', 2376: 'docker-tls', 2379: 'etcd', 2380: 'etcd-peer',
+        3306: 'mysql', 3389: 'rdp', 5432: 'postgresql', 5601: 'kibana',
+        5672: 'amqp', 5900: 'vnc', 5901: 'vnc', 5984: 'couchdb',
+        5985: 'winrm', 5986: 'winrm-ssl', 6379: 'redis', 7474: 'neo4j',
+        7687: 'neo4j-bolt', 8000: 'http-alt', 8008: 'http-alt',
+        8080: 'http-alt', 8086: 'influxdb', 8443: 'https-alt',
+        8888: 'http-alt', 9000: 'grafana', 9042: 'cassandra',
+        9090: 'prometheus', 9091: 'prometheus-push', 9092: 'kafka',
+        9200: 'elasticsearch', 9300: 'elasticsearch-transport',
+        11211: 'memcached', 15672: 'rabbitmq-mgmt', 27017: 'mongodb',
+        27018: 'mongodb-shard',
+    }
+
+    @staticmethod
+    def _ip_to_pseudo_mac(ip: str) -> str:
+        parts = ip.split('.')
+        if len(parts) != 4:
+            return ''
+        try:
+            return '00:00:' + ':'.join(f'{int(p):02x}' for p in parts)
+        except ValueError:
+            return ''
+
+    def _passive_sync_to_db(self):
+        """Flush passively-observed LAN hosts into the hosts DB.
+
+        For each LAN IP that meets the discovery threshold (real MAC seen via
+        ARP, or >= PASSIVE_MIN_PACKETS observed), upsert into `hosts`. Merges
+        listening ports with any existing port list — never replaces.
+        """
+        db = getattr(self.shared_data, 'db', None) if self.shared_data else None
+        if not db or not hasattr(db, 'upsert_host'):
+            return
+        if not self._lan_networks:
+            return
+
+        with self._lock:
+            snapshot: List[Tuple[str, str, set]] = []
+            for ip, stats in self.host_stats.items():
+                if not self._is_lan_ip(ip):
+                    continue
+                if ip in self._local_ips:
+                    continue
+                mac = self._mac_by_ip.get(ip) or stats.mac or ''
+                if not mac and stats.total_packets < self.PASSIVE_MIN_PACKETS:
+                    continue
+                listening = set(self._listening_ports.get(ip, set()))
+                snapshot.append((ip, mac, listening))
+
+        for ip, mac, listening in snapshot:
+            try:
+                self._upsert_passive_host(db, ip, mac, listening)
+            except Exception as exc:
+                logger.debug(f"Passive upsert failed for {ip}: {exc}")
+
+    def _upsert_passive_host(self, db, ip: str, mac: str, listening_ports: set):
+        existing = db.get_host_by_ip(ip)
+
+        if mac:
+            target_mac = mac.lower()
+        elif existing and existing.get('mac'):
+            target_mac = existing['mac']
+        else:
+            target_mac = self._ip_to_pseudo_mac(ip)
+        if not target_mac:
+            return
+
+        existing_ports: set = set()
+        existing_services: Dict[str, str] = {}
+        if existing:
+            for chunk in (existing.get('ports') or '').split(','):
+                chunk = chunk.strip()
+                if chunk.isdigit():
+                    existing_ports.add(int(chunk))
+            raw_services = existing.get('services') or ''
+            if raw_services:
+                try:
+                    parsed = json.loads(raw_services)
+                    if isinstance(parsed, dict):
+                        existing_services = {str(k): str(v) for k, v in parsed.items()}
+                except (ValueError, TypeError):
+                    pass
+
+        merged_ports = existing_ports | listening_ports
+        new_ports = listening_ports - existing_ports
+        if not existing and not merged_ports:
+            return  # nothing useful to write yet
+
+        services = dict(existing_services)
+        for port in merged_ports:
+            key = str(port)
+            if key not in services or not services[key]:
+                services[key] = self.PORT_SERVICE_NAMES.get(port, '')
+
+        ports_str = ','.join(str(p) for p in sorted(merged_ports))
+        # Only pass services if we have something to add — avoid clobbering
+        # richer service descriptions an active scan may have written.
+        services_arg = services if new_ports or not existing else None
+
+        db.upsert_host(
+            mac=target_mac,
+            ip=ip,
+            ports=ports_str if (new_ports or not existing) else None,
+            services=services_arg,
+        )
+
+        # Observed traffic = host is alive. Resurrects 'degraded' hosts that
+        # were wiped by a transient wifi flap or have simply stopped
+        # responding to active pings while still talking on the network.
+        if hasattr(db, 'update_ping_status'):
+            try:
+                db.update_ping_status(target_mac, success=True)
+            except Exception as exc:
+                logger.debug(f"update_ping_status failed for {target_mac}: {exc}")
+
     def _check_suspicious_patterns(self, src_ip: str, dst_ip: str,
                                    src_port: int, dst_port: int, protocol: str):
         """Check for suspicious traffic patterns"""
@@ -745,21 +1097,70 @@ class TrafficAnalyzer:
                 }
             )
 
-        # Check for potential port scanning (many ports from same source)
-        # Only alert for external IPs doing port scans
+        # Port-scan: score *targeted* ports (initiated to), weighted toward
+        # well-known service ports. Default gateway gets a softer threshold
+        # (5x) rather than full exemption — compromised routers still alert.
         if src_ip in self.host_stats and src_ip not in self._local_ips:
             stats = self.host_stats[src_ip]
-            ports_count = len(stats.ports_contacted)
-            if ports_count > 50:
+            targeted = stats.ports_targeted
+            low_ports = {p for p in targeted if 0 < p < self.PORTSCAN_EPHEMERAL_FLOOR}
+            high_value = {p for p in targeted if p in self.HIGH_VALUE_HIGH_PORTS}
+            total = len(targeted)
+            n_low = len(low_ports)
+            n_hv = len(high_value)
+            # Count high-value-high ports toward the "weighted" low-port score.
+            n_weighted = n_low + n_hv
+
+            mult = (self.PORTSCAN_GATEWAY_MULTIPLIER
+                    if src_ip in self._gateway_ips else 1)
+            low_threshold = self.PORTSCAN_LOW_PORT_THRESHOLD * mult
+            total_threshold = self.PORTSCAN_TOTAL_THRESHOLD * mult
+
+            level = None
+            if n_weighted >= low_threshold:
+                level = TrafficAlertLevel.HIGH
+                message = (f"Port scan detected: {src_ip} initiated to "
+                           f"{n_low} well-known + {n_hv} high-value ports "
+                           f"(+{total - n_weighted} other)")
+            elif total >= total_threshold:
+                level = TrafficAlertLevel.MEDIUM
+                message = (f"Heavy port activity: {src_ip} initiated to "
+                           f"{total} unique ports")
+
+            if level is not None:
+                self._create_alert(
+                    level=level,
+                    category=AlertCategory.PORT_SCAN.value,
+                    message=message,
+                    src_ip=src_ip,
+                    details={
+                        'ports_scanned': total,
+                        'low_ports_count': n_low,
+                        'high_value_ports_count': n_hv,
+                        'sample_low_ports': sorted(low_ports)[:20],
+                        'sample_high_value_ports': sorted(high_value)[:20],
+                        'sample_ports': sorted(targeted)[:20],
+                        'is_gateway': src_ip in self._gateway_ips,
+                        'scan_duration_seconds': (stats.last_seen - stats.first_seen).total_seconds()
+                    }
+                )
+
+            # Horizontal sweep: one port across many distinct destination hosts.
+            for port, dst_ips in stats.sweep_targets.items():
+                if len(dst_ips) < self.SWEEP_HOST_THRESHOLD * mult:
+                    continue
                 self._create_alert(
                     level=TrafficAlertLevel.HIGH,
                     category=AlertCategory.PORT_SCAN.value,
-                    message=f"Port scan detected: {src_ip} probed {ports_count} unique ports",
+                    message=(f"Horizontal sweep: {src_ip} hit "
+                             f"{len(dst_ips)} hosts on port {port}"),
                     src_ip=src_ip,
+                    dedup_key=f"sweep:{src_ip}:{port}",
                     details={
-                        'ports_scanned': ports_count,
-                        'sample_ports': list(stats.ports_contacted)[:20],
-                        'scan_duration_seconds': (stats.last_seen - stats.first_seen).total_seconds()
+                        'sweep_port': port,
+                        'hosts_targeted': len(dst_ips),
+                        'sample_hosts': sorted(dst_ips)[:20],
+                        'is_gateway': src_ip in self._gateway_ips,
                     }
                 )
 
@@ -1085,12 +1486,17 @@ class TrafficAnalyzer:
     
     def _create_alert(self, level: TrafficAlertLevel, category: str,
                       message: str, src_ip: str = None, dst_ip: str = None,
-                      details: Dict = None):
-        """Create a traffic alert with rate limiting and deduplication"""
+                      details: Dict = None, dedup_key: str = None):
+        """Create a traffic alert with rate limiting and deduplication.
+
+        dedup_key: optional override for the dedup hash. Use when the default
+            (category, src, dst) tuple would collapse distinct alerts — e.g.
+            sweep alerts that vary by port rather than dst_ip.
+        """
         current_time = time.time()
 
         # Alert deduplication - prevent same alert from firing repeatedly
-        alert_hash = f"{category}:{src_ip}:{dst_ip}"
+        alert_hash = dedup_key if dedup_key else f"{category}:{src_ip}:{dst_ip}"
         if alert_hash in self._alert_hashes:
             # Check if dedup window has expired
             if current_time < self._alert_hash_expiry.get(alert_hash, 0):

@@ -6804,8 +6804,52 @@ def run_arp_scan_localnet(interface='wlan0'):
         logger.error(f"Error running arp-scan: {e}")
         return {}
 
-def run_nmap_ping_scan(network='192.168.1.0/24'):
+def _detect_local_cidr():
+    """Return the local network CIDR derived from `ip` output, or None.
+
+    Used as a runtime fallback when an API caller doesn't pass an explicit
+    network=. Replaces the old hardcoded '192.168.1.0/24' default that
+    silently scanned the wrong subnet on any non-192.168.1.x network.
+    """
+    try:
+        iface = _get_wifi_iface()
+    except Exception:
+        iface = None
+    candidates = [iface] if iface else []
+    try:
+        result = subprocess.run(
+            ['ip', '-o', '-4', 'addr', 'show'],
+            capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return None
+    except Exception:
+        return None
+    import ipaddress as _ipaddress
+    for line in result.stdout.strip().splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        if candidates and parts[1] not in candidates:
+            continue
+        for i, p in enumerate(parts):
+            if p == 'inet' and i + 1 < len(parts):
+                cidr = parts[i + 1]
+                if cidr.startswith('127.'):
+                    continue
+                try:
+                    return str(_ipaddress.IPv4Network(cidr, strict=False))
+                except (ValueError, _ipaddress.NetmaskValueError):
+                    continue
+    return None
+
+
+def run_nmap_ping_scan(network=None):
     """Run nmap ping scan to discover active hosts"""
+    if network is None:
+        network = _detect_local_cidr()
+        if not network:
+            logger.error("run_nmap_ping_scan: no network specified and detection failed")
+            return {}
     command = ['sudo', 'nmap', '-sn', '-PR', network]
     logger.info(f"Running nmap ping scan: {' '.join(command)}")
     try:
@@ -6904,7 +6948,14 @@ def get_arp_scan_localnet():
 def get_nmap_ping_scan():
     """Get nmap ping scan results"""
     try:
-        network = request.args.get('network', '192.168.1.0/24')
+        network = request.args.get('network') or _detect_local_cidr()
+        if not network:
+            return jsonify({
+                'success': False,
+                'error': 'No network specified and local network detection failed',
+                'hosts': {},
+                'count': 0
+            }), 400
         hosts = run_nmap_ping_scan(network)
         
         return jsonify({
@@ -6928,8 +6979,15 @@ def get_combined_network_scan():
     """Get combined results from both ARP and nmap scans"""
     try:
         interface = request.args.get('interface', _get_wifi_iface())
-        network = request.args.get('network', '192.168.1.0/24')
-        
+        network = request.args.get('network') or _detect_local_cidr()
+        if not network:
+            return jsonify({
+                'success': False,
+                'error': 'No network specified and local network detection failed',
+                'hosts': {},
+                'count': 0
+            }), 400
+
         # Run both scans
         arp_hosts = run_arp_scan_localnet(interface)
         nmap_hosts = run_nmap_ping_scan(network)
@@ -12480,22 +12538,8 @@ def _collect_manual_targets():
                     except Exception:
                         continue
 
-        # Add example targets if no real data exists
-        if not targets:
-            targets = [
-                {
-                    'ip': '192.168.1.1',
-                    'hostname': '192.168.1.1',
-                    'ports': ['22', '80', '443'],
-                    'source': 'Example'
-                },
-                {
-                    'ip': '192.168.1.100',
-                    'hostname': '192.168.1.100',
-                    'ports': ['80', '443'],
-                    'source': 'Example'
-                }
-            ]
+        # No example seeding — empty list is the honest answer when no real
+        # data exists. Frontend shows an "empty" placeholder for this case.
     except Exception as e:
         logger.error(f"Error processing NetKB data for targets: {e}")
 
@@ -12843,9 +12887,14 @@ def stop_orchestrator_manual():
 def trigger_network_scan():
     """Trigger a manual network scan"""
     try:
-        data = request.get_json()
-        target_range = data.get('range', '192.168.1.0/24')  # Default range
-        
+        data = request.get_json() or {}
+        target_range = data.get('range') or _detect_local_cidr()
+        if not target_range:
+            return jsonify({
+                'success': False,
+                'error': 'No range specified and local network detection failed'
+            }), 400
+
         # Update status to show scanning is active
         shared_data.ragnarstatustext = "NetworkScanner"
         shared_data.ragnarstatustext2 = f"Manual scan: {target_range}"
@@ -16235,32 +16284,8 @@ def get_netkb_data():
             except Exception as e:
                 logger.warning(f"Could not list vulnerabilities directory: {e}")
         
-        # Add some example entries if no real data exists
-        if not netkb_entries:
-            netkb_entries = [
-                {
-                    'id': 'example_1',
-                    'type': 'service',
-                    'host': '192.168.1.1',
-                    'port': '22/tcp',
-                    'service': 'ssh',
-                    'description': 'SSH service detected',
-                    'severity': 'info',
-                    'discovered': time.time(),
-                    'source': 'Network Scan'
-                },
-                {
-                    'id': 'example_2',
-                    'type': 'vulnerability',
-                    'host': '192.168.1.100',
-                    'port': '80/tcp',
-                    'service': 'http',
-                    'description': 'Outdated web server version detected',
-                    'severity': 'medium',
-                    'discovered': time.time(),
-                    'source': 'Vulnerability Scan'
-                }
-            ]
+        # No example seeding — empty list is the honest answer when no real
+        # NetKB entries exist.
         
         # Calculate statistics using synchronized vulnerability count
         sync_all_counts()  # Ensure all counts are up to date
@@ -16349,19 +16374,8 @@ def export_netkb_data():
                     except Exception as e:
                         continue
         
-        # Add example data if no real data
-        if not netkb_entries:
-            netkb_entries = [
-                {
-                    'type': 'service',
-                    'host': '192.168.1.1',
-                    'port': '22/tcp',
-                    'service': 'ssh',
-                    'description': 'SSH service detected',
-                    'severity': 'info',
-                    'source': 'Network Scan'
-                }
-            ]
+        # No example seeding on export — empty CSV/JSON is the correct
+        # representation when no NetKB entries exist.
         
         if format_type == 'csv':
             import csv
