@@ -14028,13 +14028,52 @@ function formatAlertCategory(category) {
 }
 
 /**
- * Format alert details for display
+ * Format alert details for display.
+ *
+ * Renders the alert.details object as a compact, human-readable block.
+ * Arrays (mitre tags, channels, dst_ips, ...) and numbers are formatted
+ * specially so beacon / JA3 / IRC alerts read nicely.
  */
 function formatAlertDetails(details) {
     if (!details || typeof details !== 'object') return '';
-    return Object.entries(details)
-        .map(([key, value]) => `${key.replace(/_/g, ' ')}: ${value}`)
-        .join(' | ');
+
+    // Keys we promote visually (rendered as chips) when present.
+    const chipKeys = new Set(['mitre', 'channels', 'tags']);
+    // Keys we hide from the inline summary because they're either redundant
+    // with the alert.message text or only useful in deep-dive views.
+    const hideKeys = new Set(['first_seen', 'last_seen', 'protocol']);
+
+    const formatValue = (key, v) => {
+        if (v === null || v === undefined || v === '') return null;
+        if (Array.isArray(v)) {
+            if (v.length === 0) return null;
+            if (chipKeys.has(key)) {
+                return v.map(item => `<span class="inline-block px-1.5 py-0.5 mr-1 rounded bg-slate-700 text-cyan-300 text-xs">${escapeHtml(String(item))}</span>`).join('');
+            }
+            const shown = v.slice(0, 5).map(x => escapeHtml(String(x))).join(', ');
+            const more = v.length > 5 ? ` (+${v.length - 5} more)` : '';
+            return shown + more;
+        }
+        if (typeof v === 'object') {
+            try { return escapeHtml(JSON.stringify(v)); }
+            catch { return ''; }
+        }
+        if (typeof v === 'number' && !Number.isInteger(v)) {
+            return escapeHtml(v.toFixed(3));
+        }
+        return escapeHtml(String(v));
+    };
+
+    const rows = [];
+    for (const [key, raw] of Object.entries(details)) {
+        if (hideKeys.has(key)) continue;
+        const val = formatValue(key, raw);
+        if (val === null || val === '') continue;
+        const label = key.replace(/_/g, ' ');
+        rows.push(`<div><span class="text-gray-400">${escapeHtml(label)}:</span> <span class="text-gray-200">${val}</span></div>`);
+    }
+    if (!rows.length) return '';
+    return `<div class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-0.5 text-xs">${rows.join('')}</div>`;
 }
 
 async function loadTrafficProtocols() {
@@ -14587,6 +14626,11 @@ async function showTrafficHostDetail(ip) {
         const ports = host.ports_contacted || [];
         const dnsQueries = host.dns_queries || [];
 
+        // Fetch deeper-investigation data in parallel: beacons, JA3, IRC
+        // sessions, alerts. Each is filtered to entries involving this IP.
+        const [beacons, ja3Records, ircSessions, alerts] =
+            await fetchHostInvestigationData(ip);
+
         // Format timestamps
         const firstSeen = host.first_seen ? new Date(host.first_seen).toLocaleString() : 'N/A';
         const lastSeen = host.last_seen ? new Date(host.last_seen).toLocaleString() : 'N/A';
@@ -14695,6 +14739,11 @@ async function showTrafficHostDetail(ip) {
             </div>
             ` : ''}
 
+            ${renderHostBeaconSection(beacons, host.ip)}
+            ${renderHostJA3Section(ja3Records, host.ip)}
+            ${renderHostIRCSection(ircSessions, host.ip)}
+            ${renderHostAlertSection(alerts, host.ip)}
+
             <!-- Timestamps -->
             <div class="p-4 bg-slate-800 rounded-lg">
                 <h4 class="text-sm font-semibold text-gray-300 mb-3">Timeline</h4>
@@ -14726,6 +14775,170 @@ function closeTrafficHostModal() {
         modal.classList.add('hidden');
         modal.classList.remove('flex');
     }
+}
+
+// ---------------------------------------------------------------------------
+// Host-investigation enrichment: beacons, JA3 fingerprints, IRC sessions,
+// and alerts filtered to the host. Each helper returns an HTML string and
+// renders nothing when there's no data for the host.
+// ---------------------------------------------------------------------------
+
+async function fetchHostInvestigationData(ip) {
+    const tryFetch = async (url) => {
+        try {
+            const r = await fetch(url);
+            if (!r.ok) return null;
+            return await r.json();
+        } catch { return null; }
+    };
+    const [bRes, jRes, iRes, aRes] = await Promise.all([
+        tryFetch('/api/traffic/beacons?limit=200'),
+        tryFetch('/api/traffic/ja3?limit=200'),
+        tryFetch('/api/traffic/irc?limit=200'),
+        tryFetch('/api/traffic/alerts?limit=200'),
+    ]);
+    const beacons = (bRes && bRes.success ? bRes.beacons || [] : [])
+        .filter(b => b.src_ip === ip || b.dst_ip === ip);
+    const ja3 = (jRes && jRes.success ? jRes.fingerprints || [] : [])
+        .filter(r => r.src_ip === ip);
+    const irc = (iRes && iRes.success ? iRes.sessions || [] : [])
+        .filter(s => s.client_ip === ip || s.server_ip === ip);
+    const alerts = (aRes && aRes.success ? aRes.alerts || [] : [])
+        .filter(a => a.src_ip === ip || a.dst_ip === ip);
+    return [beacons, ja3, irc, alerts];
+}
+
+function renderHostBeaconSection(beacons, ip) {
+    if (!beacons || beacons.length === 0) return '';
+    const rows = beacons.slice(0, 10).map(b => {
+        const scorePct = Math.round((b.score || 0) * 100);
+        const scoreColor = scorePct >= 85 ? 'text-red-400'
+            : scorePct >= 70 ? 'text-orange-400' : 'text-yellow-400';
+        const peer = b.src_ip === ip ? b.dst_ip : b.src_ip;
+        return `
+            <div class="p-2 bg-slate-700 bg-opacity-50 rounded text-xs">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="font-mono">→ ${escapeHtml(peer)}:${b.dst_port}</span>
+                    <span class="${scoreColor} font-bold">score ${scorePct}/100</span>
+                </div>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-gray-400">
+                    <div>Interval <span class="text-gray-200">~${b.mean_interval_s}s</span></div>
+                    <div>Jitter (CV) <span class="text-gray-200">${b.interval_cv}</span></div>
+                    <div>Avg size <span class="text-gray-200">${b.mean_size_bytes} B</span></div>
+                    <div>Samples <span class="text-gray-200">${b.samples}</span></div>
+                </div>
+            </div>`;
+    }).join('');
+    return `
+        <div class="p-4 bg-red-900 bg-opacity-20 border border-red-700 rounded-lg">
+            <h4 class="text-sm font-semibold text-red-300 mb-3 flex items-center gap-2">
+                <span>🛰</span> C2 Beacon Candidates (${beacons.length})
+                <span class="text-xs font-normal text-gray-400">MITRE T1071 / T1573</span>
+            </h4>
+            <div class="space-y-2">${rows}</div>
+        </div>`;
+}
+
+function renderHostJA3Section(records, ip) {
+    if (!records || records.length === 0) return '';
+    const rows = records.slice(0, 10).map(r => {
+        const m = r.match;
+        const labelBlock = m
+            ? `<span class="px-2 py-0.5 rounded ${m.category === 'malware' ? 'bg-red-900 text-red-300' : m.category === 'iot' ? 'bg-yellow-900 text-yellow-300' : 'bg-cyan-900 text-cyan-300'}">${escapeHtml(m.label)} (${escapeHtml(m.confidence)})</span>`
+            : '<span class="text-gray-500">unclassified</span>';
+        const sni = r.sni ? `<span class="text-cyan-300">${escapeHtml(r.sni)}</span>` : '<span class="text-gray-500">no SNI</span>';
+        return `
+            <div class="p-2 bg-slate-700 bg-opacity-50 rounded text-xs">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="font-mono text-gray-300">${escapeHtml(r.ja3.slice(0, 16))}…</span>
+                    ${labelBlock}
+                </div>
+                <div class="text-gray-400 flex flex-wrap gap-x-3">
+                    <span>SNI: ${sni}</span>
+                    <span>Hits: <span class="text-gray-200">${r.count}</span></span>
+                    ${m && m.source ? `<span>Source: <span class="text-gray-200">${escapeHtml(m.source)}</span></span>` : ''}
+                </div>
+            </div>`;
+    }).join('');
+    return `
+        <div class="p-4 bg-slate-800 rounded-lg">
+            <h4 class="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
+                <span>🔐</span> TLS Fingerprints (JA3) — ${records.length}
+            </h4>
+            <div class="space-y-2">${rows}</div>
+        </div>`;
+}
+
+function renderHostIRCSection(sessions, ip) {
+    if (!sessions || sessions.length === 0) return '';
+    const rows = sessions.slice(0, 5).map(s => {
+        const channels = (s.channels && s.channels.length)
+            ? s.channels.map(c => `<span class="inline-block px-1.5 py-0.5 mr-1 rounded bg-slate-700 text-cyan-300">${escapeHtml(c)}</span>`).join('')
+            : '<span class="text-gray-500">no channels</span>';
+        const banner = (s.server_banner && s.server_banner.length)
+            ? `<div class="mt-1 text-gray-400 italic">"${escapeHtml(s.server_banner[0]).slice(0, 200)}"</div>`
+            : '';
+        const recent = (s.recent_messages || []).slice(-5).map(m => `
+            <div class="font-mono text-xs ${m.direction === 'c2s' ? 'text-cyan-300' : 'text-green-300'}">
+                ${m.direction === 'c2s' ? '→' : '←'} ${escapeHtml(m.command)} ${escapeHtml((m.params || []).join(' '))}
+            </div>`).join('');
+        return `
+            <div class="p-2 bg-slate-700 bg-opacity-50 rounded text-xs">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="font-mono">${escapeHtml(s.client_ip)} → ${escapeHtml(s.server_ip)}:${s.server_port}</span>
+                    <span class="text-gray-400">nick <span class="text-yellow-300">${escapeHtml(s.nick || '?')}</span></span>
+                </div>
+                <div class="text-gray-400 mb-1">Channels: ${channels}</div>
+                ${banner}
+                ${recent ? `<div class="mt-2 p-2 bg-slate-900 rounded space-y-0.5">${recent}</div>` : ''}
+            </div>`;
+    }).join('');
+    return `
+        <div class="p-4 bg-orange-900 bg-opacity-20 border border-orange-700 rounded-lg">
+            <h4 class="text-sm font-semibold text-orange-300 mb-3 flex items-center gap-2">
+                <span>💬</span> IRC Sessions (DPI) — ${sessions.length}
+                <span class="text-xs font-normal text-gray-400">MITRE T1071.001</span>
+            </h4>
+            <div class="space-y-2">${rows}</div>
+        </div>`;
+}
+
+function renderHostAlertSection(alerts, ip) {
+    if (!alerts || alerts.length === 0) return '';
+    const recent = alerts.slice(-10).reverse();
+    const rows = recent.map(a => {
+        const borderColor = {
+            critical: 'border-red-600',
+            high: 'border-orange-600',
+            medium: 'border-yellow-600',
+            low: 'border-blue-600',
+            info: 'border-slate-600',
+        }[a.level] || 'border-slate-600';
+        const badgeColor = {
+            critical: 'bg-red-900 text-red-300',
+            high: 'bg-orange-900 text-orange-300',
+            medium: 'bg-yellow-900 text-yellow-300',
+            low: 'bg-blue-900 text-blue-300',
+            info: 'bg-slate-700 text-gray-300',
+        }[a.level] || 'bg-slate-700 text-gray-300';
+        const ts = a.timestamp ? new Date(a.timestamp).toLocaleTimeString() : '';
+        return `
+            <div class="p-2 bg-slate-700 bg-opacity-50 rounded border-l-4 ${borderColor} text-xs">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${badgeColor}">${escapeHtml(a.level)}</span>
+                    <span class="text-gray-500">${ts}</span>
+                </div>
+                <div class="text-gray-200">${escapeHtml(a.message || '')}</div>
+                ${a.details ? formatAlertDetails(a.details) : ''}
+            </div>`;
+    }).join('');
+    return `
+        <div class="p-4 bg-slate-800 rounded-lg">
+            <h4 class="text-sm font-semibold text-gray-300 mb-3 flex items-center gap-2">
+                <span>⚠</span> Alerts involving this host (${alerts.length})
+            </h4>
+            <div class="space-y-2">${rows}</div>
+        </div>`;
 }
 
 /**

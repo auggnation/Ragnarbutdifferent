@@ -24,7 +24,8 @@ import subprocess
 import signal
 import queue
 import logging
-from typing import Dict, List, Optional, Any, Callable
+import statistics
+from typing import Dict, List, Optional, Any, Callable, Tuple
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
@@ -177,10 +178,43 @@ class TrafficAnalyzer:
         2222: "SSH alternate (dropbear)",
     }
 
+    # Ports whose "suspicious" classification only makes sense over TCP +
+    # unicast. UDP broadcasts on these are almost always a custom IoT /
+    # discovery protocol that happened to pick the port — not C2.
+    TCP_UNICAST_ONLY_PORTS = frozenset({
+        4444, 5555, 6666, 6667, 6697, 9001, 9050, 5900, 2222,
+    })
+
     # DNS tunneling detection threshold
     DNS_TUNNEL_THRESHOLD = 100  # Queries per minute from single host
     DNS_QUERY_TRACKING_WINDOW = 60  # Seconds to track DNS query rate
-    
+
+    # C2 beacon detection
+    # A flow is considered a beacon candidate when a local host repeatedly
+    # contacts the same external (ip, port) at low-jitter intervals with
+    # similar payload sizes. See _sweep_beacons() for the scoring.
+    BEACON_MIN_SAMPLES = 6           # Need this many hits before scoring
+    BEACON_HISTORY_MAX = 64          # Ring buffer length per flow
+    BEACON_MIN_INTERVAL = 5.0        # Ignore sub-5s noise (HTTP keepalive)
+    BEACON_MAX_INTERVAL = 3600.0     # Ignore very rare flows (>1h)
+    BEACON_INTERVAL_CV_MAX = 0.25    # Coefficient of variation threshold
+    BEACON_SIZE_CV_REF = 0.15        # Reference for size-consistency score
+    BEACON_SWEEP_INTERVAL = 30.0     # Re-score flows every N seconds
+    BEACON_SCORE_ALERT = 0.70        # Minimum score to raise an alert
+    BEACON_SCORE_CRITICAL = 0.85     # Score threshold for HIGH severity
+    BEACON_SCORE_IMPROVE = 0.05      # Re-alert only if score climbs by this
+    # Ports excluded from beacon detection (legitimate periodic traffic)
+    BEACON_PORT_DENYLIST = frozenset({
+        53,    # DNS
+        67, 68,  # DHCP
+        123,   # NTP
+        137, 138, 139,  # NetBIOS
+        546, 547,  # DHCPv6
+        1900,  # SSDP
+        5353,  # mDNS
+        5355,  # LLMNR
+    })
+
     # Rate limiting
     MAX_ALERTS_PER_MINUTE = 10
     STATS_RETENTION_HOURS = 24
@@ -228,6 +262,19 @@ class TrafficAnalyzer:
 
         # DNS query timestamps for rate detection
         self._dns_query_times: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
+
+        # Beacon detection state.
+        # _flow_history: (src_ip, dst_ip, dst_port) -> deque[(ts, bytes_out)]
+        # _beacon_scored: same key -> last confidence score that fired an alert
+        self._flow_history: Dict[Tuple[str, str, int], deque] = defaultdict(
+            lambda: deque(maxlen=self.BEACON_HISTORY_MAX)
+        )
+        self._beacon_scored: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
+        self._last_beacon_sweep = time.time()
+
+        # Optional sidecar subsystems (lazy, only spawned if tshark exists)
+        self._ja3_collector = None
+        self._irc_parser = None
 
         # Callbacks
         self._on_alert_callbacks: List[Callable] = []
@@ -364,14 +411,25 @@ class TrafficAnalyzer:
             daemon=True
         )
         self._analysis_thread.start()
-        
+
+        # Best-effort: spawn JA3/IRC sidecars (no-op if tshark missing)
+        try:
+            self._start_sidecars()
+        except Exception as exc:
+            logger.debug("Sidecar startup failed: %s", exc)
+
         logger.info(f"Traffic analyzer started on interface {self.interface}")
         return True
     
     def stop(self):
         """Stop traffic capture and analysis"""
         self._running = False
-        
+
+        try:
+            self._stop_sidecars()
+        except Exception as exc:
+            logger.debug("Sidecar shutdown failed: %s", exc)
+
         if self._capture_process:
             try:
                 self._capture_process.terminate()
@@ -486,6 +544,9 @@ class TrafficAnalyzer:
                     if current_time - last_metrics_update >= 1:
                         self._update_metrics()
                         last_metrics_update = current_time
+
+                # Periodically score flows for beacon behaviour
+                self._sweep_beacons()
                     
             except Exception as e:
                 logger.error(f"Analysis error: {e}")
@@ -577,7 +638,19 @@ class TrafficAnalyzer:
             
             # Check for suspicious patterns
             self._check_suspicious_patterns(src_ip, dst_ip, src_port, dst_port, protocol)
-            
+
+            # Sample outbound flows from local hosts for beacon detection
+            if (src_ip in self._local_ips
+                    or dst_ip in self._local_ips
+                    or dst_port in self.BEACON_PORT_DENYLIST
+                    or self._is_broadcast_or_multicast(dst_ip)):
+                pass
+            else:
+                # Only outbound from internal hosts (skip pure external<->external)
+                if self._is_internal(src_ip) and not self._is_internal(dst_ip):
+                    self._record_flow_sample(src_ip, dst_ip, dst_port,
+                                             time.time(), packet_size)
+
             # Check for DNS queries
             if dst_port == 53 or src_port == 53:
                 self._record_dns_query(line, src_ip, dst_ip)
@@ -640,16 +713,34 @@ class TrafficAnalyzer:
         if dst_port in self.SUSPICIOUS_PORTS or src_port in self.SUSPICIOUS_PORTS:
             suspicious_port = dst_port if dst_port in self.SUSPICIOUS_PORTS else src_port
             port_description = self.SUSPICIOUS_PORTS.get(suspicious_port, "Unknown")
+
+            proto_lc = (protocol or '').lower()
+            is_broadcast = self._is_broadcast_or_multicast(dst_ip)
+            # Suppress noise: TCP-only "C2 channel" ports over UDP/broadcast
+            # are almost always LAN discovery on a coincidentally-spicy port,
+            # not actual C2. Skip the alert entirely in that case.
+            if suspicious_port in self.TCP_UNICAST_ONLY_PORTS:
+                if proto_lc not in ('tcp', 'ip') or is_broadcast:
+                    logger.debug(
+                        f"Suppressing suspicious-port alert for "
+                        f"{dst_ip}:{suspicious_port} ({proto_lc}, "
+                        f"broadcast={is_broadcast}) - "
+                        f"'{port_description}' requires TCP unicast"
+                    )
+                    return
+
             self._create_alert(
                 level=TrafficAlertLevel.MEDIUM,
                 category=AlertCategory.SUSPICIOUS_PORT.value,
-                message=f"Suspicious port {suspicious_port} ({port_description}): {src_ip} -> {dst_ip}",
+                message=(f"Suspicious port {suspicious_port}/{proto_lc or '?'} "
+                         f"({port_description}): {src_ip} -> {dst_ip}"),
                 src_ip=src_ip,
                 dst_ip=dst_ip,
                 details={
                     'port': suspicious_port,
                     'port_description': port_description,
-                    'protocol': protocol,
+                    'protocol': proto_lc or 'unknown',
+                    'broadcast': is_broadcast,
                     'direction': 'outbound' if dst_port == suspicious_port else 'inbound'
                 }
             )
@@ -671,6 +762,302 @@ class TrafficAnalyzer:
                         'scan_duration_seconds': (stats.last_seen - stats.first_seen).total_seconds()
                     }
                 )
+
+    # ------------------------------------------------------------------ #
+    # C2 beacon detection
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _is_internal(ip: str) -> bool:
+        """Cheap RFC1918 / loopback / link-local check (IPv4 only)."""
+        if not ip:
+            return False
+        if ip.startswith('127.') or ip.startswith('169.254.'):
+            return True
+        if ip.startswith('10.') or ip.startswith('192.168.'):
+            return True
+        if ip.startswith('172.'):
+            try:
+                second = int(ip.split('.', 2)[1])
+                return 16 <= second <= 31
+            except (ValueError, IndexError):
+                return False
+        return False
+
+    @staticmethod
+    def _is_broadcast_or_multicast(ip: str) -> bool:
+        """Detect IPv4 broadcast (limited or directed) and multicast.
+
+        Used to suppress C2/beacon classifications for LAN discovery
+        chatter that happens to hit a 'suspicious' port (e.g. an ESP
+        sending UDP broadcasts on port 6667 — not actually IRC).
+        """
+        if not ip:
+            return False
+        if ip == '255.255.255.255' or ip == '0.0.0.0':
+            return True
+        # Subnet-directed broadcasts commonly end in .255 on /24 nets.
+        if ip.endswith('.255'):
+            return True
+        # IPv4 multicast: 224.0.0.0/4
+        try:
+            first = int(ip.split('.', 1)[0])
+        except (ValueError, IndexError):
+            return False
+        return 224 <= first <= 239
+
+    def _record_flow_sample(self, src_ip: str, dst_ip: str, dst_port: int,
+                            ts: float, bytes_out: int) -> None:
+        """Append one outbound packet to the per-flow ring buffer.
+
+        Called from the packet parser for every outbound packet from an
+        internal host to an external destination on a non-denylisted port.
+        """
+        if dst_port <= 0:
+            return
+        key = (src_ip, dst_ip, dst_port)
+        self._flow_history[key].append((ts, max(1, int(bytes_out))))
+
+    def _score_flow(self, samples: List[Tuple[float, int]]) -> Optional[Dict[str, Any]]:
+        """Score a single flow's beacon-likeness.
+
+        Returns a dict with score and metrics if the flow qualifies as a
+        beacon candidate, or None if it doesn't meet the minimum bar.
+
+        Score in [0,1]:
+            0.6 * (interval regularity) + 0.4 * (size regularity)
+        Interval regularity = 1 - clamp(CV_interval / CV_MAX, 0, 1)
+        Size regularity     = 1 - clamp(CV_size     / SIZE_REF, 0, 1)
+        """
+        if len(samples) < self.BEACON_MIN_SAMPLES:
+            return None
+
+        times = [s[0] for s in samples]
+        sizes = [s[1] for s in samples]
+        intervals = [b - a for a, b in zip(times, times[1:])]
+        if not intervals:
+            return None
+
+        mean_i = statistics.fmean(intervals)
+        if not (self.BEACON_MIN_INTERVAL <= mean_i <= self.BEACON_MAX_INTERVAL):
+            return None
+
+        # Population stdev (we have the full sample, not a draw from a dist)
+        stdev_i = statistics.pstdev(intervals) if len(intervals) > 1 else 0.0
+        cv_i = stdev_i / mean_i if mean_i > 0 else 1.0
+        if cv_i > self.BEACON_INTERVAL_CV_MAX:
+            return None
+
+        mean_s = statistics.fmean(sizes) or 1.0
+        stdev_s = statistics.pstdev(sizes) if len(sizes) > 1 else 0.0
+        cv_s = stdev_s / mean_s if mean_s > 0 else 1.0
+
+        interval_score = 1.0 - min(cv_i / self.BEACON_INTERVAL_CV_MAX, 1.0)
+        size_score = 1.0 - min(cv_s / self.BEACON_SIZE_CV_REF, 1.0)
+        score = 0.6 * interval_score + 0.4 * size_score
+
+        return {
+            'score': score,
+            'mean_interval_s': mean_i,
+            'interval_cv': cv_i,
+            'mean_size_bytes': mean_s,
+            'size_cv': cv_s,
+            'samples': len(samples),
+            'first_seen': times[0],
+            'last_seen': times[-1],
+        }
+
+    def _sweep_beacons(self, force: bool = False) -> List[Tuple[Tuple[str, str, int], Dict[str, Any]]]:
+        """Score every tracked flow and raise alerts for new/improved beacons.
+
+        Returns the list of (key, metrics) pairs that triggered an alert
+        during this sweep (useful for tests and the /api/traffic/beacons
+        endpoint).
+        """
+        now = time.time()
+        if not force and now - self._last_beacon_sweep < self.BEACON_SWEEP_INTERVAL:
+            return []
+        self._last_beacon_sweep = now
+
+        fired: List[Tuple[Tuple[str, str, int], Dict[str, Any]]] = []
+        # Snapshot keys so we can mutate _beacon_scored while iterating
+        for key in list(self._flow_history.keys()):
+            samples = list(self._flow_history[key])
+            metrics = self._score_flow(samples)
+            if metrics is None:
+                continue
+            score = metrics['score']
+            if score < self.BEACON_SCORE_ALERT:
+                continue
+
+            prev = self._beacon_scored.get(key, {}).get('score', 0.0)
+            if score < prev + self.BEACON_SCORE_IMPROVE:
+                # Already alerted at (approximately) this score; don't spam
+                continue
+
+            self._beacon_scored[key] = {**metrics, 'alerted_at': now}
+            src_ip, dst_ip, dst_port = key
+            level = (TrafficAlertLevel.HIGH
+                     if score >= self.BEACON_SCORE_CRITICAL
+                     else TrafficAlertLevel.MEDIUM)
+            self._create_alert(
+                level=level,
+                category=AlertCategory.C2_BEACON.value,
+                message=(
+                    f"Periodic beacon: {src_ip} -> {dst_ip}:{dst_port} "
+                    f"every ~{metrics['mean_interval_s']:.1f}s "
+                    f"(score={score:.2f})"
+                ),
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                details={
+                    'dst_port': dst_port,
+                    'score': round(score, 3),
+                    'mean_interval_s': round(metrics['mean_interval_s'], 2),
+                    'interval_cv': round(metrics['interval_cv'], 3),
+                    'mean_size_bytes': round(metrics['mean_size_bytes'], 1),
+                    'size_cv': round(metrics['size_cv'], 3),
+                    'samples': metrics['samples'],
+                    'first_seen': metrics['first_seen'],
+                    'last_seen': metrics['last_seen'],
+                    'mitre': ['T1071', 'T1573'],
+                },
+            )
+            fired.append((key, self._beacon_scored[key]))
+        return fired
+
+    def get_beacons(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Return current beacon candidates sorted by score (descending)."""
+        with self._lock:
+            items = []
+            for (src_ip, dst_ip, dst_port), metrics in self._beacon_scored.items():
+                items.append({
+                    'src_ip': src_ip,
+                    'dst_ip': dst_ip,
+                    'dst_port': dst_port,
+                    'score': round(metrics['score'], 3),
+                    'mean_interval_s': round(metrics['mean_interval_s'], 2),
+                    'interval_cv': round(metrics['interval_cv'], 3),
+                    'mean_size_bytes': round(metrics['mean_size_bytes'], 1),
+                    'size_cv': round(metrics['size_cv'], 3),
+                    'samples': metrics['samples'],
+                    'first_seen': metrics['first_seen'],
+                    'last_seen': metrics['last_seen'],
+                })
+            items.sort(key=lambda x: x['score'], reverse=True)
+            return items[:limit]
+
+    # ------------------------------------------------------------------ #
+    # Optional sidecars: JA3 collector and IRC DPI
+    # ------------------------------------------------------------------ #
+
+    def _start_sidecars(self) -> None:
+        """Best-effort start of tshark-based JA3 and IRC sidecars.
+
+        Both modules degrade gracefully if tshark is missing.
+        """
+        try:
+            from tls_fingerprint import JA3Collector
+        except Exception as exc:
+            logger.debug("JA3 collector unavailable: %s", exc)
+            JA3Collector = None  # type: ignore
+
+        if JA3Collector is not None and self._ja3_collector is None:
+            self._ja3_collector = JA3Collector(
+                interface=self.interface,
+                on_match=self._on_ja3_match,
+            )
+            if not self._ja3_collector.start():
+                self._ja3_collector = None
+
+        try:
+            from irc_dpi import IRCDPIParser
+        except Exception as exc:
+            logger.debug("IRC DPI unavailable: %s", exc)
+            IRCDPIParser = None  # type: ignore
+
+        if IRCDPIParser is not None and self._irc_parser is None:
+            self._irc_parser = IRCDPIParser(
+                interface=self.interface,
+                on_session_event=self._on_irc_event,
+            )
+            if not self._irc_parser.start():
+                self._irc_parser = None
+
+    def _stop_sidecars(self) -> None:
+        for attr in ('_ja3_collector', '_irc_parser'):
+            sidecar = getattr(self, attr, None)
+            if sidecar is not None:
+                try:
+                    sidecar.stop()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
+    def _on_ja3_match(self, record) -> None:
+        """Callback: a TLS fingerprint matched a known signature."""
+        m = record.match
+        if not m:
+            return
+        if m.category == 'malware' or m.confidence == 'high':
+            level = TrafficAlertLevel.HIGH
+        elif m.confidence == 'medium':
+            level = TrafficAlertLevel.MEDIUM
+        else:
+            level = TrafficAlertLevel.LOW
+        self._create_alert(
+            level=level,
+            category=AlertCategory.PROTOCOL_ANOMALY.value,
+            message=(f"JA3 match: {record.src_ip} uses '{m.label}' "
+                     f"(JA3={record.ja3[:12]}…)"),
+            src_ip=record.src_ip,
+            details={
+                'ja3': record.ja3,
+                'label': m.label,
+                'confidence': m.confidence,
+                'category': m.category,
+                'source': m.source,
+                'sni': record.sni,
+                'dst_ips': sorted(record.dst_ips)[:10],
+                'dst_ports': sorted(record.dst_ports),
+            },
+        )
+
+    def _on_irc_event(self, session, message) -> None:
+        """Callback: a notable IRC event was parsed off the wire."""
+        cmd = message.command
+        # The first NICK or JOIN on a session is enough to raise the flag —
+        # IRC on the wire in 2026 is almost always worth investigating.
+        if cmd == 'JOIN':
+            channels = ', '.join(sorted(session.channels)[:5])
+            self._create_alert(
+                level=TrafficAlertLevel.HIGH,
+                category=AlertCategory.C2_BEACON.value,
+                message=(f"IRC JOIN: {session.client_ip} -> "
+                         f"{session.server_ip}:{session.server_port} "
+                         f"as '{session.nick}' on {channels or '?'}"),
+                src_ip=session.client_ip,
+                dst_ip=session.server_ip,
+                details={
+                    'protocol': 'IRC',
+                    'nick': session.nick,
+                    'user': session.user,
+                    'channels': sorted(session.channels),
+                    'server_port': session.server_port,
+                    'server_banner': session.server_banner[:3],
+                    'mitre': ['T1071.001', 'T1102'],
+                },
+            )
+
+    def get_tls_fingerprints(self, limit: int = 100) -> List[Dict[str, Any]]:
+        if self._ja3_collector is None:
+            return []
+        return self._ja3_collector.get_records(limit=limit)
+
+    def get_irc_sessions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        if self._irc_parser is None:
+            return []
+        return self._irc_parser.get_sessions(limit=limit)
 
     def _check_dns_tunneling(self, src_ip: str):
         """Detect potential DNS tunneling based on query frequency"""
@@ -824,6 +1211,10 @@ class TrafficAnalyzer:
                 # DNS monitoring
                 'dns_queries_captured': len(self.dns_queries),
 
+                # Beacon detection
+                'tracked_flows': len(self._flow_history),
+                'beacon_candidates': len(self._beacon_scored),
+
                 # Configuration
                 'excluded_local_ips': list(self._local_ips),
                 'alert_dedup_window_seconds': self._alert_dedup_window,
@@ -902,6 +1293,8 @@ class TrafficAnalyzer:
             self._alert_hashes.clear()
             self._alert_hash_expiry.clear()
             self._dns_query_times.clear()
+            self._flow_history.clear()
+            self._beacon_scored.clear()
             self._alert_counter = 0
 
 
