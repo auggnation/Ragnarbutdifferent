@@ -14455,6 +14455,62 @@ def get_traffic_connections():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/traffic/beacons')
+def get_traffic_beacons():
+    """Get current C2 beacon candidates ranked by score."""
+    try:
+        analyzer = get_traffic_analyzer()
+        if not analyzer:
+            return jsonify({'success': False, 'error': 'Traffic analysis not available'}), 503
+
+        limit = request.args.get('limit', 50, type=int)
+        return jsonify({
+            'success': True,
+            'beacons': analyzer.get_beacons(limit=limit),
+        })
+    except Exception as e:
+        logger.error(f"Error getting beacons: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/traffic/ja3')
+def get_traffic_ja3():
+    """Get observed TLS (JA3/JA3S) fingerprints per host."""
+    try:
+        analyzer = get_traffic_analyzer()
+        if not analyzer:
+            return jsonify({'success': False, 'error': 'Traffic analysis not available'}), 503
+        if not hasattr(analyzer, 'get_tls_fingerprints'):
+            return jsonify({'success': True, 'fingerprints': []})
+        limit = request.args.get('limit', 100, type=int)
+        return jsonify({
+            'success': True,
+            'fingerprints': analyzer.get_tls_fingerprints(limit=limit),
+        })
+    except Exception as e:
+        logger.error(f"Error getting TLS fingerprints: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/traffic/irc')
+def get_traffic_irc():
+    """Get parsed IRC sessions (DPI) observed on the wire."""
+    try:
+        analyzer = get_traffic_analyzer()
+        if not analyzer:
+            return jsonify({'success': False, 'error': 'Traffic analysis not available'}), 503
+        if not hasattr(analyzer, 'get_irc_sessions'):
+            return jsonify({'success': True, 'sessions': []})
+        limit = request.args.get('limit', 50, type=int)
+        return jsonify({
+            'success': True,
+            'sessions': analyzer.get_irc_sessions(limit=limit),
+        })
+    except Exception as e:
+        logger.error(f"Error getting IRC sessions: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/traffic/alerts')
 def get_traffic_alerts():
     """Get traffic alerts"""
