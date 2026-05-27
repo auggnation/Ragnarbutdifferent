@@ -454,6 +454,7 @@ install_dependencies() {
         "nikto"
         "sqlmap"
         "whatweb"
+        "ffuf"
     )
 
     if [ "$IS_ARM" = true ]; then
@@ -487,6 +488,28 @@ install_dependencies() {
 
     # Update nmap scripts (may fail with SIGILL on some ARM builds)
     nmap --script-updatedb >/dev/null 2>&1 || log "WARNING" "nmap --script-updatedb failed — vulnerability scripts may be stale"
+
+    # Recon engine Python deps (TLS audit + DNS recon)
+    log "INFO" "Installing recon engine Python dependencies..."
+    pip3 install --break-system-packages sslyze dnspython tldextract >/dev/null 2>&1 \
+        || pip3 install sslyze dnspython tldextract >/dev/null 2>&1 \
+        || log "WARNING" "Failed to install sslyze/dnspython/tldextract — recon engine will report errors per scan"
+
+    # Recon engine wordlist for content discovery
+    local wordlist_dir="/opt/ragnar/wordlists"
+    local wordlist_path="$wordlist_dir/common.txt"
+    if [ ! -f "$wordlist_path" ]; then
+        log "INFO" "Fetching SecLists common.txt wordlist for content discovery..."
+        mkdir -p "$wordlist_dir"
+        if wget -q -O "$wordlist_path" "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt"; then
+            chmod 644 "$wordlist_path"
+            log "SUCCESS" "Installed content discovery wordlist at $wordlist_path"
+        else
+            log "WARNING" "Failed to download wordlist — content discovery will report errors until $wordlist_path is provided"
+        fi
+    else
+        log "INFO" "Content discovery wordlist already present"
+    fi
 
     # Configure WiFi interfaces
     log "INFO" "Configuring WiFi interfaces..."

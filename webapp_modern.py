@@ -14997,6 +14997,181 @@ def get_advanced_vuln_summary():
 
 
 # ============================================================================
+# WEB RECON API ENDPOINTS (TLS audit, passive DNS, content discovery)
+# ============================================================================
+
+_recon_engine_instance = None
+_recon_engine_lock = threading.Lock()
+
+
+def get_recon_engine():
+    """Get or create recon engine instance (thread-safe)"""
+    global _recon_engine_instance
+    if _recon_engine_instance is not None:
+        return _recon_engine_instance
+    with _recon_engine_lock:
+        if _recon_engine_instance is not None:
+            return _recon_engine_instance
+        try:
+            from recon_engine import ReconEngine
+            _recon_engine_instance = ReconEngine(shared_data)
+        except ImportError as e:
+            logger.warning(f"Recon engine unavailable: {e}")
+            return None
+    return _recon_engine_instance
+
+
+@app.route('/api/recon/status')
+def get_recon_status():
+    """Get recon engine status"""
+    try:
+        engine = get_recon_engine()
+        if not engine:
+            return jsonify({'success': False, 'available': False, 'error': 'Recon engine not available'})
+        return jsonify({
+            'success': True,
+            'available': engine.is_available(),
+            'tool_paths': engine._tool_paths,
+            'active_scans': [s.to_dict() for s in engine.active_scans.values()],
+        })
+    except Exception as e:
+        logger.error(f"Error getting recon status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/recon/scan', methods=['POST'])
+def start_recon_scan():
+    """Start a recon scan (TLS, DNS, content discovery)"""
+    try:
+        engine = get_recon_engine()
+        if not engine:
+            return jsonify({'success': False, 'error': 'Recon engine not available'}), 503
+
+        from recon_engine import ReconType
+        data = request.get_json(silent=True) or {}
+        target = (data.get('target') or '').strip()
+        if not target:
+            return jsonify({'success': False, 'error': 'target required'}), 400
+
+        recon_type_names = data.get('recon_types') or ['tls_audit', 'dns_passive', 'content_discovery']
+        recon_types = []
+        for name in recon_type_names:
+            try:
+                recon_types.append(ReconType(name))
+            except ValueError:
+                return jsonify({'success': False, 'error': f'unknown recon_type: {name}'}), 400
+
+        scan_id = engine.start_scan(target, recon_types)
+        return jsonify({'success': True, 'scan_id': scan_id})
+    except RuntimeError as e:
+        return jsonify({'success': False, 'error': str(e)}), 503
+    except Exception as e:
+        logger.error(f"Error starting recon scan: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/recon/scan/<scan_id>')
+def get_recon_scan(scan_id):
+    """Get recon scan status and partial results"""
+    try:
+        engine = get_recon_engine()
+        if not engine:
+            return jsonify({'success': False, 'error': 'Recon engine not available'}), 503
+        state = engine.get_scan_state(scan_id)
+        if not state:
+            return jsonify({'success': False, 'error': 'scan not found'}), 404
+        return jsonify({'success': True, 'scan': state.to_dict()})
+    except Exception as e:
+        logger.error(f"Error getting recon scan: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/recon/scan/<scan_id>/cancel', methods=['POST'])
+def cancel_recon_scan(scan_id):
+    """Cancel an in-flight recon scan"""
+    try:
+        engine = get_recon_engine()
+        if not engine:
+            return jsonify({'success': False, 'error': 'Recon engine not available'}), 503
+        ok = engine.cancel_scan(scan_id)
+        return jsonify({'success': ok})
+    except Exception as e:
+        logger.error(f"Error cancelling recon scan: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/recon/scan/<scan_id>/handoff-options')
+def get_recon_handoff_options(scan_id):
+    """Get discovered subdomains and paths for operator approval"""
+    try:
+        engine = get_recon_engine()
+        if not engine:
+            return jsonify({'success': False, 'error': 'Recon engine not available'}), 503
+        options = engine.get_handoff_options(scan_id)
+        if options is None:
+            return jsonify({'success': False, 'error': 'scan not found'}), 404
+        return jsonify({'success': True, **options})
+    except Exception as e:
+        logger.error(f"Error getting handoff options: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/recon/scan/<scan_id>/handoff', methods=['POST'])
+def handoff_recon_to_zap(scan_id):
+    """Hand off approved subdomains and paths to the ZAP scanner"""
+    try:
+        engine = get_recon_engine()
+        if not engine:
+            return jsonify({'success': False, 'error': 'Recon engine not available'}), 503
+        state = engine.get_scan_state(scan_id)
+        if not state:
+            return jsonify({'success': False, 'error': 'scan not found'}), 404
+
+        data = request.get_json(silent=True) or {}
+        subdomains = data.get('subdomains') or []
+        paths = data.get('paths') or []
+        force = bool(data.get('force'))
+        scan_type_name = data.get('scan_type', 'zap_full')
+        options = data.get('options') or {}
+
+        violations = engine.assert_handoff_scope(scan_id, subdomains, force=force)
+        if violations:
+            return jsonify({
+                'success': False,
+                'error': 'scope violation',
+                'out_of_scope_subdomains': violations,
+                'hint': 'pass force=true to override',
+            }), 400
+
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'ZAP scanner not available'}), 503
+
+        from advanced_vuln_scanner import ScanType
+        try:
+            scan_type = ScanType(scan_type_name)
+        except ValueError:
+            return jsonify({'success': False, 'error': f'unknown scan_type: {scan_type_name}'}), 400
+
+        options['extra_paths'] = paths
+
+        targets = [state.target] + list(subdomains)
+        zap_scan_ids = []
+        for tgt in targets:
+            target_url = tgt if tgt.startswith('http') else f'https://{tgt}'
+            zap_id = scanner.start_scan(target_url, scan_type=scan_type, options=dict(options))
+            zap_scan_ids.append({'target': target_url, 'scan_id': zap_id})
+
+        state.handed_off = True
+        state.handoff_zap_scan_id = zap_scan_ids[0]['scan_id'] if zap_scan_ids else None
+
+        return jsonify({'success': True, 'zap_scans': zap_scan_ids})
+    except Exception as e:
+        logger.error(f"Error handing off recon to ZAP: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
 # OWASP ZAP API ENDPOINTS
 # ============================================================================
 

@@ -17664,6 +17664,230 @@ function getAuthParams(authType) {
     return authParams;
 }
 
+// ============================================================================
+// Pre-flight Recon (TLS audit, passive DNS, content discovery)
+// ============================================================================
+
+let reconScanId = null;
+let reconPollInterval = null;
+
+function setReconState(name) {
+    const states = ['config', 'running', 'handoff', 'error'];
+    for (const s of states) {
+        const el = document.getElementById(`recon-state-${s}`);
+        if (el) el.classList.toggle('hidden', s !== name);
+    }
+}
+
+function showReconError(message) {
+    const el = document.getElementById('recon-state-error');
+    if (el) {
+        el.textContent = message;
+        el.classList.remove('hidden');
+    }
+}
+
+function resetReconCard() {
+    if (reconPollInterval) {
+        clearInterval(reconPollInterval);
+        reconPollInterval = null;
+    }
+    reconScanId = null;
+    const errEl = document.getElementById('recon-state-error');
+    if (errEl) errEl.classList.add('hidden');
+    setReconState('config');
+}
+
+async function startReconScan() {
+    const targetInput = document.getElementById('adv-vuln-target');
+    const target = (targetInput?.value || '').trim();
+    if (!target) {
+        showNotification('Enter a target URL first', 'error');
+        return;
+    }
+
+    const recon_types = [];
+    if (document.getElementById('recon-tls')?.checked) recon_types.push('tls_audit');
+    if (document.getElementById('recon-dns')?.checked) recon_types.push('dns_passive');
+    if (document.getElementById('recon-content')?.checked) recon_types.push('content_discovery');
+
+    if (!recon_types.length) {
+        showNotification('Select at least one recon type', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/recon/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target, recon_types }),
+        });
+        const data = await response.json();
+        if (!data.success) {
+            showReconError(data.error || 'Failed to start recon');
+            return;
+        }
+        reconScanId = data.scan_id;
+        setReconState('running');
+        renderReconProgress({ results: {} });
+        startReconPolling();
+    } catch (err) {
+        console.error('Recon start failed:', err);
+        showReconError(String(err));
+    }
+}
+
+function startReconPolling() {
+    if (reconPollInterval) clearInterval(reconPollInterval);
+    reconPollInterval = setInterval(pollReconScan, 1500);
+}
+
+async function pollReconScan() {
+    if (!reconScanId) return;
+    try {
+        const response = await fetch(`/api/recon/scan/${reconScanId}`);
+        const data = await response.json();
+        if (!data.success) return;
+
+        const scan = data.scan;
+        renderReconProgress(scan);
+
+        if (scan.status === 'completed' || scan.status === 'cancelled') {
+            clearInterval(reconPollInterval);
+            reconPollInterval = null;
+            if (scan.status === 'completed') {
+                await loadReconHandoffOptions();
+            } else {
+                resetReconCard();
+            }
+        }
+    } catch (err) {
+        console.error('Recon poll failed:', err);
+    }
+}
+
+function renderReconProgress(scan) {
+    const container = document.getElementById('recon-progress');
+    if (!container) return;
+    const labels = {
+        tls_audit: 'TLS audit',
+        dns_passive: 'DNS subdomain enum',
+        content_discovery: 'Content discovery',
+    };
+    const results = scan.results || {};
+    const html = Object.entries(labels).map(([key, label]) => {
+        const r = results[key];
+        let badge;
+        if (!r) {
+            badge = '<span class="text-gray-500">pending</span>';
+        } else if (r.status === 'ok') {
+            badge = `<span class="text-emerald-400">ok (${r.findings.length} findings)</span>`;
+        } else if (r.status === 'error') {
+            badge = `<span class="text-red-400" title="${escapeHtml(r.error_message)}">error</span>`;
+        } else {
+            badge = `<span class="text-yellow-400">${r.status}</span>`;
+        }
+        return `<div class="flex items-center justify-between"><span class="text-gray-300">${label}</span>${badge}</div>`;
+    }).join('');
+    container.innerHTML = html;
+}
+
+async function cancelReconScan() {
+    if (!reconScanId) return;
+    try {
+        await fetch(`/api/recon/scan/${reconScanId}/cancel`, { method: 'POST' });
+    } catch (err) {
+        console.error('Recon cancel failed:', err);
+    }
+    resetReconCard();
+}
+
+async function loadReconHandoffOptions() {
+    if (!reconScanId) return;
+    try {
+        const response = await fetch(`/api/recon/scan/${reconScanId}/handoff-options`);
+        const data = await response.json();
+        if (!data.success) {
+            showReconError(data.error || 'Failed to load handoff options');
+            return;
+        }
+        renderReconHandoff(data);
+        setReconState('handoff');
+    } catch (err) {
+        console.error('Handoff options failed:', err);
+        showReconError(String(err));
+    }
+}
+
+function renderReconHandoff(data) {
+    const subsEl = document.getElementById('recon-subdomains-list');
+    const pathsEl = document.getElementById('recon-paths-list');
+    if (subsEl) {
+        if (!data.subdomains?.length) {
+            subsEl.innerHTML = '<p class="text-xs text-gray-500">No additional subdomains discovered.</p>';
+        } else {
+            subsEl.innerHTML = '<p class="text-xs text-gray-400 mb-1">Subdomains:</p>' + data.subdomains.map(s => `
+                <label class="flex items-center gap-2 px-2 py-1 hover:bg-slate-700/50 rounded text-xs cursor-pointer">
+                    <input type="checkbox" class="recon-subdomain-cb" value="${escapeHtml(s.name)}" ${s.alive ? 'checked' : ''}>
+                    <span class="text-gray-200 flex-1">${escapeHtml(s.name)}</span>
+                    <span class="${s.alive ? 'text-emerald-400' : 'text-gray-500'}">${s.alive ? 'alive' : 'dead'}</span>
+                    <span class="text-gray-500">${s.a_records?.length ? 'A' : ''}${s.aaaa_records?.length ? ' AAAA' : ''}</span>
+                </label>
+            `).join('');
+        }
+    }
+    if (pathsEl) {
+        if (!data.paths?.length) {
+            pathsEl.innerHTML = '<p class="text-xs text-gray-500 mt-2">No additional paths discovered.</p>';
+        } else {
+            pathsEl.innerHTML = '<p class="text-xs text-gray-400 mb-1 mt-2">Interesting paths:</p>' + data.paths.map(p => `
+                <label class="flex items-center gap-2 px-2 py-1 hover:bg-slate-700/50 rounded text-xs cursor-pointer">
+                    <input type="checkbox" class="recon-path-cb" value="${escapeHtml(p.path)}" checked>
+                    <span class="text-gray-200 flex-1">/${escapeHtml(p.path)}</span>
+                    <span class="text-gray-500">HTTP ${p.status}</span>
+                    <span class="text-gray-500">${p.length || 0}B</span>
+                </label>
+            `).join('');
+        }
+    }
+}
+
+async function handoffReconToZap(force) {
+    if (!reconScanId) return;
+    const subdomains = Array.from(document.querySelectorAll('.recon-subdomain-cb:checked')).map(cb => cb.value);
+    const paths = Array.from(document.querySelectorAll('.recon-path-cb:checked')).map(cb => cb.value);
+
+    const scannerSelect = document.getElementById('adv-vuln-scanner');
+    const scan_type = scannerSelect ? scannerSelect.value : 'zap_full';
+
+    try {
+        const response = await fetch(`/api/recon/scan/${reconScanId}/handoff`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subdomains, paths, scan_type, force: !!force }),
+        });
+        const data = await response.json();
+        if (!data.success) {
+            if (data.out_of_scope_subdomains?.length) {
+                const warn = document.getElementById('recon-scope-warning');
+                if (warn) {
+                    warn.classList.remove('hidden');
+                    warn.innerHTML = `Out of scope: ${data.out_of_scope_subdomains.map(escapeHtml).join(', ')}. <button onclick="handoffReconToZap(true)" class="underline text-red-200">Override</button>`;
+                }
+                return;
+            }
+            showReconError(data.error || 'Handoff failed');
+            return;
+        }
+        showNotification(`Handed off ${data.zap_scans.length} ZAP scan(s)`, 'success');
+        resetReconCard();
+        if (typeof startAdvVulnPolling === 'function') startAdvVulnPolling();
+    } catch (err) {
+        console.error('Handoff failed:', err);
+        showReconError(String(err));
+    }
+}
+
 function startAdvVulnPolling() {
     if (advVulnRefreshInterval) {
         clearInterval(advVulnRefreshInterval);

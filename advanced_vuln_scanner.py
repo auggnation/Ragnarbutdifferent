@@ -3535,6 +3535,19 @@ class AdvancedVulnScanner:
             raise
         time.sleep(1)
 
+        extra_paths = options.get('extra_paths') or []
+        if extra_paths:
+            base = target.rstrip('/')
+            seeded = 0
+            for path in extra_paths:
+                seed_url = path if path.startswith('http') else f"{base}/{path.lstrip('/')}"
+                try:
+                    self._zap_api_call('JSON/core/action/accessUrl', {'url': seed_url, 'followRedirects': 'true'})
+                    seeded += 1
+                except Exception as e:
+                    self._scan_log(scan_id, 'debug', f"Failed to seed {seed_url}: {e}")
+            self._scan_log(scan_id, 'info', f"Seeded {seeded}/{len(extra_paths)} recon paths into spider tree")
+
         profile = self._get_strength_profile(options)
         spider_params = {
             'url': target,
