@@ -178,6 +178,13 @@ class TrafficAnalyzer:
         2222: "SSH alternate (dropbear)",
     }
 
+    # Ports whose "suspicious" classification only makes sense over TCP +
+    # unicast. UDP broadcasts on these are almost always a custom IoT /
+    # discovery protocol that happened to pick the port — not C2.
+    TCP_UNICAST_ONLY_PORTS = frozenset({
+        4444, 5555, 6666, 6667, 6697, 9001, 9050, 5900, 2222,
+    })
+
     # DNS tunneling detection threshold
     DNS_TUNNEL_THRESHOLD = 100  # Queries per minute from single host
     DNS_QUERY_TRACKING_WINDOW = 60  # Seconds to track DNS query rate
@@ -635,7 +642,8 @@ class TrafficAnalyzer:
             # Sample outbound flows from local hosts for beacon detection
             if (src_ip in self._local_ips
                     or dst_ip in self._local_ips
-                    or dst_port in self.BEACON_PORT_DENYLIST):
+                    or dst_port in self.BEACON_PORT_DENYLIST
+                    or self._is_broadcast_or_multicast(dst_ip)):
                 pass
             else:
                 # Only outbound from internal hosts (skip pure external<->external)
@@ -705,16 +713,34 @@ class TrafficAnalyzer:
         if dst_port in self.SUSPICIOUS_PORTS or src_port in self.SUSPICIOUS_PORTS:
             suspicious_port = dst_port if dst_port in self.SUSPICIOUS_PORTS else src_port
             port_description = self.SUSPICIOUS_PORTS.get(suspicious_port, "Unknown")
+
+            proto_lc = (protocol or '').lower()
+            is_broadcast = self._is_broadcast_or_multicast(dst_ip)
+            # Suppress noise: TCP-only "C2 channel" ports over UDP/broadcast
+            # are almost always LAN discovery on a coincidentally-spicy port,
+            # not actual C2. Skip the alert entirely in that case.
+            if suspicious_port in self.TCP_UNICAST_ONLY_PORTS:
+                if proto_lc not in ('tcp', 'ip') or is_broadcast:
+                    logger.debug(
+                        f"Suppressing suspicious-port alert for "
+                        f"{dst_ip}:{suspicious_port} ({proto_lc}, "
+                        f"broadcast={is_broadcast}) - "
+                        f"'{port_description}' requires TCP unicast"
+                    )
+                    return
+
             self._create_alert(
                 level=TrafficAlertLevel.MEDIUM,
                 category=AlertCategory.SUSPICIOUS_PORT.value,
-                message=f"Suspicious port {suspicious_port} ({port_description}): {src_ip} -> {dst_ip}",
+                message=(f"Suspicious port {suspicious_port}/{proto_lc or '?'} "
+                         f"({port_description}): {src_ip} -> {dst_ip}"),
                 src_ip=src_ip,
                 dst_ip=dst_ip,
                 details={
                     'port': suspicious_port,
                     'port_description': port_description,
-                    'protocol': protocol,
+                    'protocol': proto_lc or 'unknown',
+                    'broadcast': is_broadcast,
                     'direction': 'outbound' if dst_port == suspicious_port else 'inbound'
                 }
             )
@@ -757,6 +783,28 @@ class TrafficAnalyzer:
             except (ValueError, IndexError):
                 return False
         return False
+
+    @staticmethod
+    def _is_broadcast_or_multicast(ip: str) -> bool:
+        """Detect IPv4 broadcast (limited or directed) and multicast.
+
+        Used to suppress C2/beacon classifications for LAN discovery
+        chatter that happens to hit a 'suspicious' port (e.g. an ESP
+        sending UDP broadcasts on port 6667 — not actually IRC).
+        """
+        if not ip:
+            return False
+        if ip == '255.255.255.255' or ip == '0.0.0.0':
+            return True
+        # Subnet-directed broadcasts commonly end in .255 on /24 nets.
+        if ip.endswith('.255'):
+            return True
+        # IPv4 multicast: 224.0.0.0/4
+        try:
+            first = int(ip.split('.', 1)[0])
+        except (ValueError, IndexError):
+            return False
+        return 224 <= first <= 239
 
     def _record_flow_sample(self, src_ip: str, dst_ip: str, dst_port: int,
                             ts: float, bytes_out: int) -> None:
