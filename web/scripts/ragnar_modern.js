@@ -5446,7 +5446,7 @@ function initializePwnagotchiVisibility() {
 // PWNAGOTCHI BRIDGE UPDATES (independent of Ragnar self-update)
 // ============================================================================
 
-let pwnUpdateInitialChecked = false;
+let pwnUpdateInitialChecked = false; // wired in Task 9 (one-shot auto-check on Bridge reveal)
 let pwnUpdateInFlight = false;
 
 function _setPwnUpdateBadge(text, classes) {
@@ -5465,7 +5465,7 @@ function _setPwnUpdateWarnings(messages) {
         return;
     }
     el.classList.remove('hidden');
-    el.innerHTML = messages.map(m => `<div>&#9888; ${m}</div>`).join('');
+    el.innerHTML = messages.map(m => `<div>&#9888; ${escapeHtml(m)}</div>`).join('');
 }
 
 function _setPwnUpdatePerformEnabled(enabled) {
