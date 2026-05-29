@@ -272,11 +272,6 @@ class TrafficAnalyzer:
     PASSIVE_MAX_LISTEN_PORTS = 100       # cap per host
     PASSIVE_LAN_PREFIX = 24              # /24 around each known local/gateway IP
 
-    # Hostname enrichment: label traffic IPs with the Hostname stored in the
-    # hosts DB by an earlier scan/discovery. Cached so API polling doesn't
-    # query the DB per request; misses expire too so a name found later shows.
-    HOSTNAME_CACHE_TTL = 60.0            # re-query an IP's hostname at most this often
-
     # Rate limiting
     MAX_ALERTS_PER_MINUTE = 10
     STATS_RETENTION_HOURS = 24
@@ -305,12 +300,10 @@ class TrafficAnalyzer:
         # Passive discovery state:
         # _mac_by_ip: IP -> MAC (from ARP replies)
         # _listening_ports: IP -> set of service ports it appears to serve
-        # _hostname_by_ip: IP -> hostname resolved from the hosts DB (cached)
-        # _hostname_lookup_ts: IP -> last DB lookup time (for cache TTL)
+        # _hostname_by_ip: IP -> hostname (from observed DNS replies)
         self._mac_by_ip: Dict[str, str] = {}
         self._listening_ports: Dict[str, set] = {}
         self._hostname_by_ip: Dict[str, str] = {}
-        self._hostname_lookup_ts: Dict[str, float] = {}
         self._last_passive_sync: float = time.time()
         
         # Statistics storage
@@ -1060,45 +1053,6 @@ class TrafficAnalyzer:
             except Exception as exc:
                 logger.debug(f"update_ping_status failed for {target_mac}: {exc}")
 
-    def _resolve_hostname(self, ip: str) -> Optional[str]:
-        """Return the Hostname stored for an IP in the hosts DB, if any.
-
-        Looks the IP up in the `hosts` table (populated by active scans and
-        passive discovery) and returns its Hostname so traffic views can show
-        a human-readable name instead of a bare IP. Results — including
-        misses — are cached for HOSTNAME_CACHE_TTL seconds so repeated API
-        polls don't hit the DB on every request, while a name discovered by a
-        later scan still surfaces within one TTL window.
-
-        Must be called WITHOUT self._lock held; it performs DB I/O.
-        """
-        if not ip:
-            return None
-
-        now = time.time()
-        last = self._hostname_lookup_ts.get(ip)
-        if last is not None and now - last < self.HOSTNAME_CACHE_TTL:
-            return self._hostname_by_ip.get(ip) or None
-
-        hostname = None
-        db = getattr(self.shared_data, 'db', None) if self.shared_data else None
-        if db and hasattr(db, 'get_host_by_ip'):
-            try:
-                record = db.get_host_by_ip(ip)
-                if record:
-                    candidate = (record.get('hostname') or '').strip()
-                    if candidate and candidate.lower() != 'unknown':
-                        hostname = candidate
-            except Exception as exc:
-                logger.debug(f"Hostname lookup failed for {ip}: {exc}")
-
-        self._hostname_lookup_ts[ip] = now
-        if hostname:
-            self._hostname_by_ip[ip] = hostname
-        else:
-            self._hostname_by_ip.pop(ip, None)
-        return hostname
-
     def _check_suspicious_patterns(self, src_ip: str, dst_ip: str,
                                    src_port: int, dst_port: int, protocol: str):
         """Check for suspicious traffic patterns"""
@@ -1683,30 +1637,15 @@ class TrafficAnalyzer:
                 hosts.sort(key=lambda h: h.total_packets, reverse=True)
             elif sort_by == 'connections':
                 hosts.sort(key=lambda h: len(h.ports_contacted), reverse=True)
-
-            result = [h.to_dict() for h in hosts[:limit]]
-
-        for host in result:
-            resolved = self._resolve_hostname(host.get('ip'))
-            if resolved:
-                host['hostname'] = resolved
-        return result
+            
+            return [h.to_dict() for h in hosts[:limit]]
     
     def get_active_connections(self, limit: int = 50) -> List[Dict]:
         """Get active connections sorted by last activity"""
         with self._lock:
             conns = list(self.connections.values())
             conns.sort(key=lambda c: c.last_seen, reverse=True)
-            result = [c.to_dict() for c in conns[:limit]]
-
-        for conn in result:
-            src_hostname = self._resolve_hostname(conn.get('src_ip'))
-            dst_hostname = self._resolve_hostname(conn.get('dst_ip'))
-            if src_hostname:
-                conn['src_hostname'] = src_hostname
-            if dst_hostname:
-                conn['dst_hostname'] = dst_hostname
-        return result
+            return [c.to_dict() for c in conns[:limit]]
     
     def get_alerts(self, limit: int = 100, level: str = None) -> List[Dict]:
         """Get recent alerts"""
@@ -1732,15 +1671,9 @@ class TrafficAnalyzer:
     def get_host_details(self, ip: str) -> Optional[Dict]:
         """Get detailed stats for a specific host"""
         with self._lock:
-            stats = self.host_stats.get(ip)
-            details = stats.to_dict() if stats else None
-
-        if details is None:
+            if ip in self.host_stats:
+                return self.host_stats[ip].to_dict()
             return None
-        resolved = self._resolve_hostname(ip)
-        if resolved:
-            details['hostname'] = resolved
-        return details
     
     def acknowledge_alert(self, alert_id: str) -> bool:
         """Acknowledge an alert"""
@@ -1768,8 +1701,6 @@ class TrafficAnalyzer:
             self._dns_query_times.clear()
             self._flow_history.clear()
             self._beacon_scored.clear()
-            self._hostname_by_ip.clear()
-            self._hostname_lookup_ts.clear()
             self._alert_counter = 0
 
 

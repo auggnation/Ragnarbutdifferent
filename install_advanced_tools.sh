@@ -163,7 +163,11 @@ echo -e "${CYAN}═════════════════════�
 
 if check_installed "nuclei"; then
     echo -e "${GREEN}Nuclei already installed, checking for updates...${NC}"
-    nuclei -update-templates 2>/dev/null || true
+    if [ -n "$RAGNAR_USER" ]; then
+        sudo -u "$RAGNAR_USER" nuclei -update-templates 2>/dev/null || nuclei -update-templates 2>/dev/null || true
+    else
+        nuclei -update-templates 2>/dev/null || true
+    fi
 else
     echo -e "${BLUE}Installing Nuclei...${NC}"
     

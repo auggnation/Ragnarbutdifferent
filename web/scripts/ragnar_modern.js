@@ -14095,9 +14095,6 @@ async function loadTrafficHosts() {
             const bgClass = isLocalIp ? 'bg-purple-900 bg-opacity-30 border border-purple-600 border-opacity-30' : 'bg-slate-700 bg-opacity-50 hover:bg-slate-600 hover:bg-opacity-50';
             const portsCount = host.ports_contacted?.length || 0;
             const protocolsCount = Object.keys(host.protocols || {}).length;
-            const hostnameLabel = host.hostname && host.hostname !== 'Unknown'
-                ? `<span class="ml-2 font-sans text-xs text-gray-400">${escapeHtml(host.hostname)}</span>`
-                : '';
 
             return `
                 <div class="flex items-center justify-between p-2 ${bgClass} rounded-lg cursor-pointer transition-colors"
@@ -14105,7 +14102,7 @@ async function loadTrafficHosts() {
                     <div class="flex items-center space-x-3">
                         <div class="w-2 h-2 rounded-full ${host.packets_in > host.packets_out ? 'bg-green-400' : 'bg-blue-400'}"></div>
                         <div>
-                            <div class="font-mono text-sm flex items-center">${escapeHtml(host.ip)}${localBadge}${hostnameLabel}</div>
+                            <div class="font-mono text-sm flex items-center">${escapeHtml(host.ip)}${localBadge}</div>
                             <div class="text-xs text-gray-400">
                                 ${formatBytes(host.total_bytes)} | ${portsCount} ports | ${protocolsCount} protocols
                             </div>
@@ -14170,15 +14167,13 @@ async function loadTrafficConnections() {
         container.innerHTML = data.connections.map((conn, index) => {
             const duration = conn.duration_seconds ? formatDuration(conn.duration_seconds) : 'N/A';
             const connData = encodeURIComponent(JSON.stringify(conn));
-            const srcHostname = conn.src_hostname ? ` <span class="text-gray-500">(${escapeHtml(conn.src_hostname)})</span>` : '';
-            const dstHostname = conn.dst_hostname ? ` <span class="text-gray-500">(${escapeHtml(conn.dst_hostname)})</span>` : '';
             return `
                 <div class="p-2 bg-slate-700 bg-opacity-50 hover:bg-slate-600 hover:bg-opacity-50 rounded-lg text-xs font-mono cursor-pointer transition-colors"
                      onclick="showTrafficConnectionDetail(decodeURIComponent('${connData}'))" title="Click for details">
                     <div class="flex items-center justify-between">
-                        <span class="text-cyan-400">${escapeHtml(conn.src_ip)}:${conn.src_port}${srcHostname}</span>
+                        <span class="text-cyan-400">${escapeHtml(conn.src_ip)}:${conn.src_port}</span>
                         <span class="text-gray-500 mx-1">→</span>
-                        <span class="text-green-400">${escapeHtml(conn.dst_ip)}:${conn.dst_port}${dstHostname}</span>
+                        <span class="text-green-400">${escapeHtml(conn.dst_ip)}:${conn.dst_port}</span>
                         <svg class="w-3 h-3 text-gray-500 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
                         </svg>
@@ -14547,8 +14542,6 @@ async function loadTrafficTopTalkers() {
                 pairs[key] = {
                     src: conn.src_ip,
                     dst: conn.dst_ip,
-                    srcHostname: conn.src_hostname || '',
-                    dstHostname: conn.dst_hostname || '',
                     bytes: 0,
                     packets: 0,
                     connections: 0,
@@ -14568,17 +14561,15 @@ async function loadTrafficTopTalkers() {
         container.innerHTML = sortedPairs.map(pair => {
             const percent = (pair.bytes / maxBytes) * 100;
             const protocols = Array.from(pair.protocols).join(', ').toUpperCase();
-            const srcLabel = pair.srcHostname ? `${escapeHtml(pair.src)} (${escapeHtml(pair.srcHostname)})` : escapeHtml(pair.src);
-            const dstLabel = pair.dstHostname ? `${escapeHtml(pair.dst)} (${escapeHtml(pair.dstHostname)})` : escapeHtml(pair.dst);
             return `
                 <div class="relative p-2 bg-slate-700 bg-opacity-30 rounded overflow-hidden hover:bg-slate-600 hover:bg-opacity-40 transition-colors">
                     <div class="absolute inset-0 bg-gradient-to-r from-cyan-600 to-transparent opacity-20" style="width: ${percent}%"></div>
                     <div class="relative flex items-center justify-between">
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center space-x-2 text-xs">
-                                <span class="text-cyan-400 font-mono truncate cursor-pointer hover:underline" onclick="showTrafficHostDetail('${escapeHtml(pair.src)}')" title="View source host details">${srcLabel}</span>
+                                <span class="text-cyan-400 font-mono truncate cursor-pointer hover:underline" onclick="showTrafficHostDetail('${escapeHtml(pair.src)}')" title="View source host details">${escapeHtml(pair.src)}</span>
                                 <span class="text-gray-500">→</span>
-                                <span class="text-green-400 font-mono truncate cursor-pointer hover:underline" onclick="showTrafficHostDetail('${escapeHtml(pair.dst)}')" title="View destination host details">${dstLabel}</span>
+                                <span class="text-green-400 font-mono truncate cursor-pointer hover:underline" onclick="showTrafficHostDetail('${escapeHtml(pair.dst)}')" title="View destination host details">${escapeHtml(pair.dst)}</span>
                             </div>
                             <div class="text-xs text-gray-500 mt-1">
                                 ${protocols} | ${pair.connections} conn | ${pair.packets} pkts
@@ -15219,22 +15210,14 @@ function showTrafficConnectionDetail(connDataStr) {
     const duration = conn.duration_seconds ? formatDuration(conn.duration_seconds) : 'N/A';
     const firstSeen = conn.first_seen ? new Date(conn.first_seen).toLocaleString() : 'N/A';
     const lastSeen = conn.last_seen ? new Date(conn.last_seen).toLocaleString() : 'N/A';
-    const srcHostname = conn.src_hostname ? `<div class="text-xs text-gray-400 font-sans">${escapeHtml(conn.src_hostname)}</div>` : '';
-    const dstHostname = conn.dst_hostname ? `<div class="text-xs text-gray-400 font-sans">${escapeHtml(conn.dst_hostname)}</div>` : '';
 
     content.innerHTML = `
         <!-- Connection Header -->
         <div class="p-4 bg-slate-800 rounded-lg">
-            <div class="flex items-start justify-center gap-3 text-lg font-mono mb-4">
-                <div class="text-center">
-                    <span class="text-cyan-400">${escapeHtml(conn.src_ip)}:${conn.src_port}</span>
-                    ${srcHostname}
-                </div>
+            <div class="flex items-center justify-center gap-3 text-lg font-mono mb-4">
+                <span class="text-cyan-400">${escapeHtml(conn.src_ip)}:${conn.src_port}</span>
                 <span class="text-gray-500">→</span>
-                <div class="text-center">
-                    <span class="text-green-400">${escapeHtml(conn.dst_ip)}:${conn.dst_port}</span>
-                    ${dstHostname}
-                </div>
+                <span class="text-green-400">${escapeHtml(conn.dst_ip)}:${conn.dst_port}</span>
             </div>
             <div class="flex justify-center">
                 <span class="px-3 py-1 bg-blue-900 text-blue-300 rounded-full text-sm font-semibold">
@@ -17105,7 +17088,7 @@ async function loadAdvancedVulnData() {
         }
 
         hideAdvVulnNotAvailable();
-        updateScannerStatus(data.scanners);
+        updateScannerStatus(data.scanners, data.nuclei_templates);
         updateVulnSummary(data.summary);
 
         // Parse findings (already fetched in parallel)
@@ -17662,8 +17645,12 @@ function hideAdvVulnNotAvailable() {
     if (notice) notice.classList.add('hidden');
 }
 
-function updateScannerStatus(scanners) {
+function updateScannerStatus(scanners, nucleiTemplates) {
     if (!scanners) return;
+
+    // Cache so the nuclei template card can be re-rendered after a manual update
+    advVulnScannersStatusCache = scanners;
+    if (nucleiTemplates !== undefined) advVulnNucleiTemplatesCache = nucleiTemplates;
 
     const scannerIds = ['nuclei', 'nikto', 'sqlmap', 'nmap_vuln', 'whatweb', 'zap'];
 
@@ -17673,7 +17660,9 @@ function updateScannerStatus(scanners) {
 
         if (statusEl) {
             const available = scanners[id];
-            if (id === 'zap') {
+            if (id === 'nuclei') {
+                updateNucleiCardStatus(statusEl, available, advVulnNucleiTemplatesCache);
+            } else if (id === 'zap') {
                 // ZAP has special status (installed vs running)
                 if (scanners.zap_running) {
                     statusEl.textContent = 'Running';
@@ -17719,6 +17708,70 @@ function updateScannerStatus(scanners) {
         } else {
             browserWarning.classList.add('hidden');
         }
+    }
+}
+
+let advVulnScannersStatusCache = null;
+let advVulnNucleiTemplatesCache = null;
+
+function updateNucleiCardStatus(statusEl, available, templates) {
+    statusEl.classList.remove('text-green-400', 'text-gray-400', 'text-yellow-400');
+    statusEl.onclick = null;
+    statusEl.style.cursor = '';
+    statusEl.title = '';
+
+    if (!available) {
+        statusEl.textContent = 'Not installed';
+        statusEl.classList.add('text-gray-400');
+        return;
+    }
+
+    const count = templates?.count || 0;
+    if (count > 0) {
+        statusEl.textContent = `${count.toLocaleString()} templates`;
+        statusEl.classList.add('text-green-400');
+        const bits = [];
+        if (templates.version) bits.push(`version ${templates.version}`);
+        if (templates.updated_at) bits.push(`updated ${new Date(templates.updated_at).toLocaleDateString()}`);
+        statusEl.title = bits.length ? `Nuclei templates: ${bits.join(' · ')}` : 'Nuclei templates installed';
+    } else {
+        statusEl.textContent = '⚠ No templates — install';
+        statusEl.classList.add('text-yellow-400');
+        statusEl.style.cursor = 'pointer';
+        statusEl.title = 'Click to download nuclei templates';
+        statusEl.onclick = () => updateNucleiTemplates(false);
+    }
+}
+
+async function updateNucleiTemplates(force = false) {
+    try {
+        const resp = await fetch('/api/vuln-advanced/nuclei/templates/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ force })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showNotification('Nuclei templates downloading in the background — this can take a minute', 'success');
+            setTimeout(refreshNucleiTemplateStatus, 20000);
+        } else {
+            showNotification(data.error || 'Failed to start template update', 'error');
+        }
+    } catch (e) {
+        console.error('Error updating nuclei templates:', e);
+        showNotification('Failed to start template update', 'error');
+    }
+}
+
+async function refreshNucleiTemplateStatus() {
+    try {
+        const resp = await fetch('/api/vuln-advanced/nuclei/templates');
+        const data = await resp.json();
+        if (data.success && advVulnScannersStatusCache) {
+            updateScannerStatus(advVulnScannersStatusCache, data.templates);
+        }
+    } catch (e) {
+        // non-fatal
     }
 }
 

@@ -442,6 +442,22 @@ class AdvancedVulnScanner:
         self.scan_results: Dict[str, List[VulnerabilityFinding]] = {}
         self._scan_counter = 0
 
+        # Running subprocess handles, keyed by scan_id, so cancel_scan can
+        # actually terminate the external tool (nuclei/nikto/sqlmap/nmap/whatweb).
+        # A list per scan_id because a Full scan runs several tools concurrently.
+        self._scan_processes: Dict[str, List[subprocess.Popen]] = {}
+        self._scan_processes_lock = threading.Lock()
+
+        # Cached result of the passwordless-sudo probe for nmap
+        self._nmap_sudo_ok: Optional[bool] = None
+
+        # Nuclei template tracking (cached; counting ~10k files is not free)
+        self._nuclei_template_cache: Optional[Dict[str, Any]] = None
+        self._nuclei_template_cache_ts: float = 0.0
+        self._nuclei_template_lock = threading.Lock()
+        self._nuclei_update_lock = threading.Lock()
+        self._nuclei_templates_stop = threading.Event()
+
         # Scan history (deque for recent scans)
         from collections import deque
         self.scan_history: deque = deque(maxlen=100)
@@ -480,6 +496,10 @@ class AdvancedVulnScanner:
         # Watchdog thread: auto-starts ZAP and keeps it alive
         if self._tool_paths.get('zap'):
             threading.Thread(target=self._zap_watchdog, daemon=True).start()
+
+        # Maintainer thread: auto-download nuclei templates if missing, refresh weekly
+        if self._tool_paths.get('nuclei'):
+            threading.Thread(target=self._nuclei_template_maintainer, daemon=True).start()
 
     def _init_database(self):
         """Initialize database connection for scan persistence"""
@@ -735,6 +755,23 @@ class AdvancedVulnScanner:
         if progress:
             return progress.log_entries[since_index:]
         return []
+
+    def _register_scan_process(self, scan_id: str, process: subprocess.Popen):
+        """Track a running subprocess so it can be killed on cancellation"""
+        with self._scan_processes_lock:
+            procs = self._scan_processes.setdefault(scan_id, [])
+            procs[:] = [p for p in procs if p.poll() is None]
+            procs.append(process)
+
+    def _unregister_scan_process(self, scan_id: str):
+        """Stop tracking all subprocesses for a finished scan"""
+        with self._scan_processes_lock:
+            self._scan_processes.pop(scan_id, None)
+
+    def _is_scan_cancelled(self, scan_id: str) -> bool:
+        """Check whether a scan has been marked cancelled"""
+        progress = self.active_scans.get(scan_id)
+        return bool(progress and progress.status == 'cancelled')
 
     def _get_strength_profile(self, options: Dict) -> Dict:
         """Get scan strength profile configuration from options."""
@@ -1029,15 +1066,22 @@ class AdvancedVulnScanner:
             elif scan_type == ScanType.FULL:
                 self._run_full_scan(scan_id, target, options)
 
-            progress.status = 'completed'
-            progress.progress_percent = 100
-            self._scan_log(scan_id, 'info', f"Scan completed successfully with {len(self.scan_results.get(scan_id, []))} findings")
+            if progress.status == 'cancelled':
+                self._scan_log(scan_id, 'info', f"Scan cancelled with {len(self.scan_results.get(scan_id, []))} findings collected")
+            else:
+                progress.status = 'completed'
+                progress.progress_percent = 100
+                self._scan_log(scan_id, 'info', f"Scan completed successfully with {len(self.scan_results.get(scan_id, []))} findings")
 
         except Exception as e:
-            self._scan_log(scan_id, 'error', f"Scan failed: {e}")
-            progress.status = 'failed'
-            progress.error_message = str(e)
+            if progress.status == 'cancelled':
+                self._scan_log(scan_id, 'info', "Scan stopped after cancellation")
+            else:
+                self._scan_log(scan_id, 'error', f"Scan failed: {e}")
+                progress.status = 'failed'
+                progress.error_message = str(e)
         finally:
+            self._unregister_scan_process(scan_id)
             progress.completed_at = datetime.now()
             progress.findings_count = len(self.scan_results.get(scan_id, []))
             # Save final status to database
@@ -1046,6 +1090,187 @@ class AdvancedVulnScanner:
             for finding in self.scan_results.get(scan_id, []):
                 self._save_finding_to_db(finding, scan_id)
     
+    # Where nuclei stores its templates, in priority order (per-user)
+    NUCLEI_TEMPLATE_DIR_CANDIDATES = [
+        '~/.local/nuclei-templates',
+        '~/nuclei-templates',
+    ]
+    NUCLEI_CONFIG_PATH = '~/.config/nuclei/.templates-config.json'
+    _NUCLEI_TEMPLATE_CACHE_TTL = 300  # seconds
+
+    def _find_nuclei_templates_dir(self) -> Optional[str]:
+        """Locate the nuclei templates directory for the service user."""
+        candidates = []
+
+        env_dir = os.environ.get('NUCLEI_TEMPLATES')
+        if env_dir:
+            candidates.append(env_dir)
+
+        config_path = os.path.expanduser(self.NUCLEI_CONFIG_PATH)
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    cfg = json.load(f)
+                for key in ('templates-directory', 'nuclei-templates-directory', 'templatesDirectory'):
+                    if cfg.get(key):
+                        candidates.append(cfg[key])
+        except Exception:
+            pass
+
+        candidates.extend(self.NUCLEI_TEMPLATE_DIR_CANDIDATES)
+
+        for path in candidates:
+            expanded = os.path.expanduser(path) if path else ''
+            if expanded and os.path.isdir(expanded):
+                return expanded
+        return None
+
+    def _read_nuclei_templates_version(self) -> str:
+        """Read the installed templates version from nuclei's config, if present."""
+        config_path = os.path.expanduser(self.NUCLEI_CONFIG_PATH)
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r') as f:
+                    cfg = json.load(f)
+                for key in ('nuclei-templates-version', 'nuclei-templates-latest-version',
+                            'templateVersion', 'nuclei-latest-version'):
+                    if cfg.get(key):
+                        return str(cfg[key])
+        except Exception:
+            pass
+        return ''
+
+    def get_nuclei_template_info(self, force: bool = False) -> Dict[str, Any]:
+        """Return info about installed nuclei templates (cached, since counting
+        ~10k files on every status poll would be wasteful)."""
+        if not self._tool_paths.get('nuclei'):
+            return {'installed': False, 'count': 0, 'directory': '',
+                    'version': '', 'updated_at': None, 'reason': 'nuclei not installed'}
+
+        with self._nuclei_template_lock:
+            now = time.monotonic()
+            if (not force and self._nuclei_template_cache is not None
+                    and now - self._nuclei_template_cache_ts < self._NUCLEI_TEMPLATE_CACHE_TTL):
+                return self._nuclei_template_cache
+
+            directory = self._find_nuclei_templates_dir()
+            count = 0
+            if directory:
+                try:
+                    for _root, _dirs, files in os.walk(directory):
+                        for name in files:
+                            if name.endswith(('.yaml', '.yml')):
+                                count += 1
+                except Exception as e:
+                    logger.debug(f"Error counting nuclei templates: {e}")
+
+            updated_at = None
+            config_path = os.path.expanduser(self.NUCLEI_CONFIG_PATH)
+            try:
+                ref = config_path if os.path.exists(config_path) else directory
+                if ref:
+                    updated_at = datetime.fromtimestamp(os.path.getmtime(ref)).isoformat()
+            except Exception:
+                updated_at = None
+
+            info = {
+                'installed': count > 0,
+                'count': count,
+                'directory': directory or '',
+                'version': self._read_nuclei_templates_version(),
+                'updated_at': updated_at,
+            }
+            self._nuclei_template_cache = info
+            self._nuclei_template_cache_ts = now
+            return info
+
+    def ensure_nuclei_templates(self, force_update: bool = False) -> Dict[str, Any]:
+        """Ensure nuclei templates are present, downloading them if missing.
+
+        Runs `nuclei -update-templates` as the current (service) user so the
+        templates land in the same directory the scanner reads from.
+        """
+        nuclei_path = self._tool_paths.get('nuclei')
+        if not nuclei_path:
+            return {'installed': False, 'updated': False, 'count': 0, 'reason': 'nuclei not installed'}
+
+        info = self.get_nuclei_template_info(force=True)
+        if info['count'] > 0 and not force_update:
+            return {'installed': True, 'updated': False, 'count': info['count']}
+
+        if not self._nuclei_update_lock.acquire(blocking=False):
+            return {'installed': info['count'] > 0, 'updated': False,
+                    'count': info['count'], 'reason': 'update already in progress'}
+
+        try:
+            verb = 'refreshing' if info['count'] else 'missing — downloading'
+            logger.info(f"Nuclei templates {verb} via -update-templates")
+            ok = False
+            try:
+                proc = subprocess.run(
+                    [nuclei_path, '-update-templates'],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, timeout=1800
+                )
+                ok = proc.returncode == 0
+                if not ok:
+                    logger.warning(f"nuclei -update-templates returned {proc.returncode}: {(proc.stderr or '')[-300:]}")
+            except Exception as e:
+                logger.warning(f"nuclei -update-templates failed: {e}")
+        finally:
+            self._nuclei_update_lock.release()
+
+        new_info = self.get_nuclei_template_info(force=True)
+        return {'installed': new_info['count'] > 0, 'updated': ok, 'count': new_info['count']}
+
+    def _nuclei_template_maintainer(self):
+        """Background thread: download templates if missing at startup, refresh weekly."""
+        REFRESH_INTERVAL = 7 * 24 * 3600  # weekly
+
+        if self._nuclei_templates_stop.wait(timeout=20):
+            return
+        try:
+            info = self.get_nuclei_template_info(force=True)
+            if info['count'] == 0:
+                logger.info("No nuclei templates found at startup — fetching")
+                self.ensure_nuclei_templates()
+            else:
+                logger.info(f"Nuclei templates present: {info['count']} templates "
+                            f"(version {info['version'] or 'unknown'})")
+        except Exception as e:
+            logger.debug(f"Initial nuclei template check failed: {e}")
+
+        while not self._nuclei_templates_stop.wait(timeout=REFRESH_INTERVAL):
+            try:
+                self.ensure_nuclei_templates(force_update=True)
+            except Exception as e:
+                logger.debug(f"Periodic nuclei template refresh failed: {e}")
+
+    def _resolve_nuclei_template_args(self, requested: List[str]) -> List[str]:
+        """Map logical template categories to -t paths valid for the installed
+        nuclei-templates layout.
+
+        nuclei-templates v9.6+ moved the HTTP categories (cves, exposures,
+        misconfiguration, technologies, takeovers, default-logins, ...) under
+        an `http/` directory. Passing the old top-level path makes nuclei exit
+        immediately with "no templates were found", so we probe both layouts
+        and drop categories that exist in neither.
+        """
+        tdir = self._find_nuclei_templates_dir()
+        resolved = []
+        for raw in requested:
+            cat = (raw or '').strip().strip('/')
+            if not cat:
+                continue
+            if not tdir:
+                resolved.append(cat)
+                continue
+            for candidate in (cat, f'http/{cat}'):
+                if os.path.isdir(os.path.join(tdir, candidate)):
+                    resolved.append(candidate)
+                    break
+        return resolved
+
     def _run_nuclei_scan(self, scan_id: str, target: str, options: Dict):
         """Run Nuclei template-based scan"""
         nuclei_path = self._tool_paths.get('nuclei')
@@ -1058,10 +1283,22 @@ class AdvancedVulnScanner:
         templates = options.get('templates', self.NUCLEI_FAST_TEMPLATES)
         severity_filter = options.get('severity', 'low,medium,high,critical')
         rate_limit = options.get('rate_limit', 150)
-        
+
+        # Warn early if templates are missing — otherwise nuclei is a no-op
+        tpl_info = self.get_nuclei_template_info()
+        if tpl_info.get('count', 0) == 0:
+            self._scan_log(scan_id, 'warning',
+                           "No nuclei templates installed — triggering download. "
+                           "This scan may report nothing until templates finish installing.")
+            threading.Thread(target=self.ensure_nuclei_templates, daemon=True).start()
+        else:
+            self._scan_log(scan_id, 'info',
+                           f"Using {tpl_info['count']} nuclei templates (version {tpl_info.get('version') or 'unknown'})")
+
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as output_file:
             output_path = output_file.name
-        
+        stderr_path = output_path + '.err'
+
         try:
             cmd = [
                 nuclei_path,
@@ -1070,14 +1307,23 @@ class AdvancedVulnScanner:
                 '-o', output_path,
                 '-severity', severity_filter,
                 '-rate-limit', str(rate_limit),
-                '-silent',
+                '-stats', '-si', '30',
                 '-no-color'
             ]
-            
-            # Add template filters if specified
+
+            # Resolve template categories against the installed layout (v9.6+
+            # moved them under http/). Skip -t entirely if none resolve, so
+            # nuclei falls back to its full default set instead of erroring.
             if templates:
-                for t in templates[:5]:  # Limit templates
-                    cmd.extend(['-t', t])
+                resolved = self._resolve_nuclei_template_args(templates)
+                if resolved:
+                    for t in resolved[:8]:
+                        cmd.extend(['-t', t])
+                    self._scan_log(scan_id, 'info', f"Nuclei template paths: {', '.join(resolved[:8])}")
+                else:
+                    self._scan_log(scan_id, 'warning',
+                                   "No requested template categories found on disk; "
+                                   "running nuclei's default template set filtered by severity")
 
             # Add HTTP Basic Auth header if provided
             if options.get('http_basic_auth'):
@@ -1105,24 +1351,64 @@ class AdvancedVulnScanner:
                     cmd.extend(['-H', header])
 
             logger.debug(f"Running Nuclei: {' '.join(cmd)}")
-            
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            # Monitor progress
-            while process.poll() is None:
-                time.sleep(2)
-                progress.current_check = "Scanning with Nuclei templates..."
-                # Update findings count from output file
-                if os.path.exists(output_path):
-                    with open(output_path, 'r') as f:
-                        lines = f.readlines()
-                        progress.findings_count = len(lines)
-            
+
+            # stdout goes to the -o file; route process stdout to DEVNULL and
+            # stderr to a file so the pipe buffer can never fill and deadlock,
+            # and so we can read the real error message afterwards.
+            errf = open(stderr_path, 'w')
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=errf,
+                    text=True
+                )
+                self._register_scan_process(scan_id, process)
+
+                # Monitor progress with a hard runtime cap so a hung nuclei
+                # process cannot block the scan thread indefinitely.
+                max_runtime = int(options.get('max_runtime', 1800))
+                start_time = time.monotonic()
+                while process.poll() is None:
+                    time.sleep(2)
+                    if self._is_scan_cancelled(scan_id):
+                        process.kill()
+                        break
+                    if time.monotonic() - start_time > max_runtime:
+                        self._scan_log(scan_id, 'warning', f"Nuclei scan exceeded {max_runtime}s, terminating")
+                        process.kill()
+                        break
+                    progress.current_check = "Scanning with Nuclei templates..."
+                    # Update findings count from output file
+                    if os.path.exists(output_path):
+                        with open(output_path, 'r') as f:
+                            lines = f.readlines()
+                            progress.findings_count = len(lines)
+            finally:
+                errf.close()
+
+            returncode = process.returncode
+            stderr_text = ''
+            try:
+                with open(stderr_path, 'r', errors='replace') as f:
+                    stderr_text = f.read()
+            except Exception:
+                pass
+
+            # Surface nuclei's own diagnostics — previously these were discarded,
+            # leaving "0 findings" indistinguishable from a hard failure.
+            lower_err = stderr_text.lower()
+            if returncode not in (0, None) and not self._is_scan_cancelled(scan_id):
+                tail = stderr_text.strip()[-600:]
+                self._scan_log(scan_id, 'warning',
+                               f"Nuclei exited with code {returncode}" + (f": {tail}" if tail else ""))
+            if any(s in lower_err for s in ('no templates were found', 'could not find any templates',
+                                            'no templates provided', 'no valid templates')):
+                msg = ("Nuclei loaded no templates — templates are missing or the requested "
+                       "categories don't exist. Use the 'install templates' action on the Nuclei card.")
+                self._scan_log(scan_id, 'error', msg)
+                progress.error_message = msg
+
             # Parse results
             if os.path.exists(output_path):
                 with open(output_path, 'r') as f:
@@ -1133,10 +1419,14 @@ class AdvancedVulnScanner:
                                 self.scan_results[scan_id].append(finding)
                         except json.JSONDecodeError:
                             continue
-                            
+
         finally:
-            if os.path.exists(output_path):
-                os.unlink(output_path)
+            for path in (output_path, stderr_path):
+                if os.path.exists(path):
+                    try:
+                        os.unlink(path)
+                    except Exception:
+                        pass
     
     def _parse_nuclei_result(self, json_line: str, scan_id: str) -> Optional[VulnerabilityFinding]:
         """Parse a Nuclei JSON output line"""
@@ -1219,14 +1509,15 @@ class AdvancedVulnScanner:
             # These auth methods are better suited for Nuclei scans which support -H flag
 
             logger.info(f"Running Nikto: {' '.join(cmd)}")
-            
+
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
             )
-            
+            self._register_scan_process(scan_id, process)
+
             stdout, stderr = process.communicate(timeout=600)
             
             if stdout:
@@ -1399,7 +1690,8 @@ class AdvancedVulnScanner:
                     stderr=subprocess.PIPE,
                     text=True
                 )
-                
+                self._register_scan_process(scan_id, process)
+
                 # Read output for progress
                 for line in iter(process.stdout.readline, ''):
                     if 'identified the following injection' in line.lower():
@@ -1447,45 +1739,76 @@ class AdvancedVulnScanner:
         except Exception as e:
             logger.error(f"Error parsing SQLMap output: {e}")
     
+    def _nmap_sudo_available(self, nmap_path: str) -> bool:
+        """Return True if nmap can be run via passwordless sudo.
+
+        Probed once with `sudo -n` so it never blocks on a password prompt.
+        A SYN scan (sudo/root) is preferred for speed, but we fall back to an
+        unprivileged TCP connect scan whenever passwordless sudo is unavailable.
+        """
+        if self._nmap_sudo_ok is not None:
+            return self._nmap_sudo_ok
+
+        import sys
+        if sys.platform == 'win32':
+            self._nmap_sudo_ok = False
+            return False
+
+        try:
+            probe = subprocess.run(
+                ['sudo', '-n', nmap_path, '--version'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10
+            )
+            self._nmap_sudo_ok = probe.returncode == 0
+        except Exception:
+            self._nmap_sudo_ok = False
+
+        return self._nmap_sudo_ok
+
     def _run_nmap_vuln_scan(self, scan_id: str, target: str, options: Dict):
         """Run Nmap vulnerability scripts"""
         nmap_path = self._tool_paths.get('nmap')
         if not nmap_path:
             raise RuntimeError("Nmap not installed")
-        
+
         progress = self.active_scans[scan_id]
-        
+
         with tempfile.NamedTemporaryFile(mode='w', suffix='.xml', delete=False) as output_file:
             output_path = output_file.name
-        
+
         try:
             ports = options.get('ports', '21,22,23,25,80,443,445,3306,3389,8080')
             scripts = options.get('scripts', 'vuln,auth,default')
-            
-            cmd = [
-                'sudo', nmap_path,
-                '-sV',
+
+            if self._nmap_sudo_available(nmap_path):
+                cmd = ['sudo', '-n', nmap_path, '-Pn', '-sV']
+            else:
+                cmd = [nmap_path, '-Pn', '-sT', '-sV']
+            cmd += [
                 '-p', ports,
                 f'--script={scripts}',
                 '-oX', output_path,
                 '--host-timeout', '10m',
                 target
             ]
-            
+
             logger.debug(f"Running Nmap vuln: {' '.join(cmd)}")
-            
+
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
             )
-            
+            self._register_scan_process(scan_id, process)
+
             stdout, stderr = process.communicate(timeout=900)
-            
+
             # Parse XML output
             self._parse_nmap_vuln_xml(output_path, scan_id)
-            
+
         except subprocess.TimeoutExpired:
             process.kill()
             progress.error_message = "Nmap vuln scan timed out"
@@ -1544,33 +1867,55 @@ class AdvancedVulnScanner:
             raise RuntimeError("WhatWeb not installed")
         
         progress = self.active_scans[scan_id]
-        
+
+        cmd = [
+            whatweb_path,
+            '--log-json=-',
+            '-a', str(options.get('aggression', 3)),
+            target
+        ]
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        self._register_scan_process(scan_id, process)
+
         try:
-            cmd = [
-                whatweb_path,
-                '--log-json=-',
-                '-a', str(options.get('aggression', 3)),
-                target
-            ]
-            
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
-            
-            # Parse JSON output
-            for line in result.stdout.strip().split('\n'):
-                if line.strip():
-                    try:
-                        data = json.loads(line)
-                        self._parse_whatweb_result(data, scan_id)
-                    except json.JSONDecodeError:
-                        continue
-                        
+            stdout, _stderr = process.communicate(timeout=300)
         except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, _stderr = process.communicate()
             progress.error_message = "WhatWeb scan timed out"
+
+        self._parse_whatweb_output(stdout, scan_id)
+
+    def _parse_whatweb_output(self, stdout: str, scan_id: str):
+        """Parse WhatWeb JSON output (handles array, single object, or JSON-lines)"""
+        stdout = (stdout or '').strip()
+        if not stdout:
+            return
+
+        try:
+            doc = json.loads(stdout)
+            items = doc if isinstance(doc, list) else [doc]
+            for item in items:
+                if isinstance(item, dict):
+                    self._parse_whatweb_result(item, scan_id)
+            return
+        except json.JSONDecodeError:
+            pass
+
+        for line in stdout.split('\n'):
+            line = line.strip().rstrip(',')
+            if not line or line in ('[', ']'):
+                continue
+            try:
+                self._parse_whatweb_result(json.loads(line), scan_id)
+            except json.JSONDecodeError:
+                continue
     
     def _parse_whatweb_result(self, data: Dict, scan_id: str):
         """Parse WhatWeb JSON result"""
@@ -5562,7 +5907,8 @@ class AdvancedVulnScanner:
         }
 
     def cancel_scan(self, scan_id: str) -> bool:
-        """Cancel a running scan"""
+        """Cancel a running scan and terminate its underlying tool process"""
+        cancelled = False
         with self._lock:
             if scan_id in self.active_scans:
                 progress = self.active_scans[scan_id]
@@ -5570,10 +5916,21 @@ class AdvancedVulnScanner:
                     progress.status = 'cancelled'
                     progress.error_message = 'Cancelled by user'
                     progress.completed_at = datetime.now()
-                    # Save to database
                     self._save_scan_to_db(scan_id, progress)
-                    return True
-        return False
+                    cancelled = True
+
+        if cancelled:
+            with self._scan_processes_lock:
+                processes = list(self._scan_processes.get(scan_id, []))
+            for process in processes:
+                if process.poll() is None:
+                    try:
+                        process.kill()
+                        self._scan_log(scan_id, 'info', "Terminated scan process on cancel")
+                    except Exception as e:
+                        logger.debug(f"Error killing process for {scan_id}: {e}")
+
+        return cancelled
 
     def delete_scan(self, scan_id: str) -> bool:
         """Delete a scan and its findings from memory and database"""
@@ -5697,7 +6054,11 @@ class AdvancedVulnScanner:
             return None
 
     def cleanup(self):
-        """Cleanup resources (ZAP process, etc.)"""
+        """Cleanup resources (ZAP process, background threads, etc.)"""
+        try:
+            self._nuclei_templates_stop.set()
+        except Exception:
+            pass
         try:
             if self._zap_process and self._zap_process.poll() is None:
                 self._zap_process.terminate()

@@ -15044,6 +15044,7 @@ def get_advanced_vuln_status():
             'success': True,
             'available': scanner.is_available(),
             'scanners': scanner.get_available_scanners(),
+            'nuclei_templates': scanner.get_nuclei_template_info(),
             'summary': scanner.get_summary(),
             'active_scans': scanner.get_active_scans_list()
         })
@@ -15078,6 +15079,7 @@ def get_advanced_vuln_debug():
 
         debug_info = {
             'tool_paths': scanner._tool_paths,
+            'nuclei_templates': scanner.get_nuclei_template_info(),
             'total_scans': len(scanner.scan_history),
             'active_scans': len(scanner.active_scans),
             'scan_results_keys': list(scanner.scan_results.keys()),
@@ -15100,6 +15102,43 @@ def get_advanced_vuln_debug():
         return jsonify(debug_info)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/vuln-advanced/nuclei/templates', methods=['GET'])
+def get_nuclei_templates_status():
+    """Get nuclei template installation status (count, version, directory)"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Scanner not available'}), 503
+        return jsonify({'success': True, 'templates': scanner.get_nuclei_template_info(force=True)})
+    except Exception as e:
+        logger.error(f"Error getting nuclei template status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/vuln-advanced/nuclei/templates/update', methods=['POST'])
+def update_nuclei_templates():
+    """Trigger a nuclei template download/refresh in the background"""
+    try:
+        scanner = get_advanced_vuln_scanner()
+        if not scanner:
+            return jsonify({'success': False, 'error': 'Scanner not available'}), 503
+
+        force = bool((request.get_json(silent=True) or {}).get('force', False))
+        threading.Thread(
+            target=scanner.ensure_nuclei_templates,
+            kwargs={'force_update': force},
+            daemon=True
+        ).start()
+
+        return jsonify({
+            'success': True,
+            'message': 'Nuclei template update started in background'
+        })
+    except Exception as e:
+        logger.error(f"Error updating nuclei templates: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/vuln-advanced/scan', methods=['POST'])
