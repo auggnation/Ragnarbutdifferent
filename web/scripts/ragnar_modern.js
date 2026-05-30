@@ -15588,98 +15588,8 @@ function updateWardrivingUI(status) {
         if (ifInfo) ifInfo.textContent = `Interfaces: ${status.interfaces.join(', ')}`;
     }
 
-    // HuginnESP status bar
-    const espBar = document.getElementById('wd-esp-bar');
-    if (espBar) {
-        espBar.classList.remove('hidden');
-        const dot = document.getElementById('wd-esp-status-dot');
-        const details = document.getElementById('wd-esp-details');
-        const labelEl = document.getElementById('wd-esp-label');
-        if (status.serial_connected) {
-            if (dot) dot.className = 'w-2 h-2 rounded-full bg-green-500 animate-pulse';
-            if (details) details.style.display = '';
-            if (labelEl) labelEl.textContent = status.companion_name || 'Companion';
-            updateElement('wd-esp-port', status.serial_port || '');
-
-            // Piglet / Piglet Coordinator: WiFi-only, no on-device BLE
-            // reporting, no scan mode switching. Hide Mode / BLE chips.
-            // Plain Piglet hides Unique too; the Coordinator keeps Unique
-            // and gains an extra WiFi chip (distinct BSSIDs the mesh saw).
-            const compName = status.companion_name || '';
-            const isPiglet = compName === 'Piglet' || compName === 'Piglet Coordinator';
-            const isCoord  = compName === 'Piglet Coordinator';
-            const toggle = (id, hidden) => {
-                const el = document.getElementById(id);
-                if (!el) return;
-                el.classList.toggle('hidden', hidden);
-            };
-            toggle('wd-esp-mode-wrapper',       isPiglet);
-            toggle('wd-esp-ble-wrapper',        isPiglet);
-            toggle('wd-esp-unique-wrapper',     isPiglet && !isCoord);
-            toggle('wd-esp-coord-wifi-wrapper', !isCoord);
-
-            // WiFi counter — for the Coordinator, the leading number is the
-            // sum of records contributed by all mesh nodes (matches the
-            // per-node bar below) and the extra "WiFi:" chip shows distinct
-            // BSSIDs. For plain Piglet / Huginn, the leading number stays as
-            // the running serial_networks counter.
-            const netLabelEl = document.getElementById('wd-esp-net-label');
-            if (isCoord) {
-                const nodes = Array.isArray(status.coordinator_nodes)
-                    ? status.coordinator_nodes : [];
-                const totalRx = nodes.reduce((a, n) => a + (n.records_rx || 0), 0);
-                updateElement('wd-esp-net-count', String(totalRx));
-                if (netLabelEl) netLabelEl.textContent = 'Records:';
-                updateElement('wd-esp-coord-wifi-count',
-                    String(status.serial_seen_unique || 0));
-            } else {
-                updateElement('wd-esp-net-count', String(status.serial_networks || 0));
-                if (netLabelEl) netLabelEl.textContent = 'WiFi:';
-            }
-            updateElement('wd-esp-unique', String(status.serial_unique || 0));
-
-            // Show current scan mode and BLE count (only relevant for Huginn)
-            const modeEl = document.getElementById('wd-esp-mode');
-            if (modeEl) {
-                const modeLabels = {
-                    wifi: 'WiFi', 'ble-flipper': '🐬 Flipper',
-                    'ble-airtag': '🏷️ AirTag', 'ble-skimmer': '💳 Skimmer',
-                    pineap: '🍍 PineAP', ble: 'BLE', stations: 'Stations',
-                    wardrive: '🏎️ Wardrive (fast)'
-                };
-                modeEl.textContent = modeLabels[status.esp_mode] || status.esp_mode || '';
-            }
-            updateElement('wd-esp-ble-count', String(status.esp_ble_count || 0));
-            // Show mesh node count (Piglet Core)
-            const meshWrapper = document.getElementById('wd-esp-mesh-wrapper');
-            if (meshWrapper) {
-                if (status.mesh_node_count > 0) {
-                    meshWrapper.classList.remove('hidden');
-                    updateElement('wd-esp-mesh-nodes', String(status.mesh_node_count));
-                } else {
-                    meshWrapper.classList.add('hidden');
-                }
-            }
-            // Piglet Coordinator: per-node breakdown
-            _renderCoordinatorNodes(status);
-            // Show alerts
-            const alertEl = document.getElementById('wd-esp-alerts');
-            if (alertEl && status.esp_alerts && status.esp_alerts.length > 0) {
-                const latest = status.esp_alerts[status.esp_alerts.length - 1];
-                alertEl.textContent = '⚠️ ' + latest.alert;
-                alertEl.classList.remove('hidden');
-            } else if (alertEl) {
-                alertEl.classList.add('hidden');
-            }
-        } else {
-            // No ESP32 connected — show searching message
-            if (dot) dot.className = 'w-2 h-2 rounded-full bg-gray-500 animate-pulse';
-            if (details) details.style.display = 'none';
-            updateElement('wd-esp-port', 'Ragnar looking for Huginn or Piglet...');
-            const alertEl = document.getElementById('wd-esp-alerts');
-            if (alertEl) alertEl.classList.add('hidden');
-        }
-    }
+    // ESP companion status bars — one per connected companion
+    _renderCompanionBars(status);
 
     // WiFi Adapters status bar
     _renderWifiAdaptersBar(status);
@@ -15688,49 +15598,134 @@ function updateWardrivingUI(status) {
     updateSerialStatus(status);
 }
 
-// Render the per-node breakdown bar for the Piglet Coordinator firmware.
-// Each node shows its short MAC (last 4 bytes) + records contributed +
-// age in seconds (stale > 30 s goes orange, > 60 s grey).
-function _renderCoordinatorNodes(status) {
-    const bar  = document.getElementById('wd-coord-nodes-bar');
-    const list = document.getElementById('wd-coord-nodes-list');
-    if (!bar || !list) return;
-    const nodes = status && Array.isArray(status.coordinator_nodes)
-        ? status.coordinator_nodes : [];
-    if (nodes.length === 0) {
-        bar.classList.add('hidden');
-        list.innerHTML = '';
+// Render one status bar per connected USB companion. The backend exposes a
+// full per-device list in status.companions; we render each separately rather
+// than collapsing them into one aggregated bar (which showed up as e.g.
+// "Piglet, Piglet" on a single line with summed counts).
+const _ESP_MODE_LABELS = {
+    wifi: 'WiFi', 'ble-flipper': '🐬 Flipper', 'ble-airtag': '🏷️ AirTag',
+    'ble-skimmer': '💳 Skimmer', pineap: '🍍 PineAP', ble: 'BLE',
+    stations: 'Stations', wardrive: '🏎️ Wardrive (fast)'
+};
+
+function _renderCompanionBars(status) {
+    const container = document.getElementById('wd-esp-companions');
+    if (!container) return;
+    const companions = Array.isArray(status.companions) ? status.companions : [];
+
+    if (companions.length === 0) {
+        container.innerHTML =
+            `<div class="bg-slate-800/40 border border-slate-700 rounded-lg px-4 py-2 flex items-center gap-3 flex-wrap">
+                <span class="text-xs font-bold text-purple-400">Companion</span>
+                <span class="w-2 h-2 rounded-full bg-gray-500 animate-pulse"></span>
+                <span class="text-xs text-gray-400">Ragnar looking for Huginn or Piglet...</span>
+            </div>`;
         return;
     }
-    bar.classList.remove('hidden');
-    // Header counts
+
+    // "Unique" (ESP-only networks vs local adapters) is a session-wide
+    // aggregate, so it can only be attributed to a device when exactly one
+    // companion is connected. With several, we omit it from the per-bar view.
+    const single = companions.filter(c => c.connected).length === 1;
+    container.innerHTML = companions
+        .map(c => _companionBarHtml(c, single, status))
+        .join('');
+}
+
+function _companionBarHtml(c, single, status) {
+    const name     = c.name || 'Companion';
+    const isPiglet = name === 'Piglet' || name === 'Piglet Coordinator';
+    const isCoord  = name === 'Piglet Coordinator';
+    const dotColor = c.connected ? 'bg-green-500' : 'bg-gray-500';
+
+    const chips = [];
+    const sep = '<span class="text-xs text-gray-500">|</span>';
+
+    // Mode — only Huginn / Piglet Core switch scan modes; hidden for Piglet.
+    if (c.connected && !isPiglet) {
+        const mode = _ESP_MODE_LABELS[c.esp_mode] || c.esp_mode || '';
+        chips.push(`${sep}
+            <span class="text-xs text-gray-400">Mode:</span>
+            <span class="text-xs font-bold text-amber-400">${escapeHtml(mode)}</span>`);
+    }
+
+    // WiFi / Records — Coordinator shows mesh records + distinct BSSIDs.
+    if (c.connected && isCoord) {
+        const nodes = Array.isArray(c.coordinator_nodes) ? c.coordinator_nodes : [];
+        const totalRx = nodes.reduce((a, n) => a + (n.records_rx || 0), 0);
+        chips.push(`${sep}
+            <span class="text-xs text-gray-400">Records:</span>
+            <span class="text-xs font-bold text-emerald-400">${totalRx}</span>`);
+        if (single) {
+            chips.push(`${sep}
+                <span class="text-xs text-gray-400">WiFi:</span>
+                <span class="text-xs font-bold text-emerald-400">${status.serial_seen_unique || 0}</span>`);
+        }
+    } else if (c.connected) {
+        chips.push(`${sep}
+            <span class="text-xs text-gray-400">WiFi:</span>
+            <span class="text-xs font-bold text-emerald-400">${c.networks || 0}</span>`);
+    }
+
+    // BLE — hidden for Piglet / Coordinator (WiFi-only firmware).
+    if (c.connected && !isPiglet) {
+        chips.push(`<span class="text-xs text-gray-400">BLE:</span>
+            <span class="text-xs font-bold text-blue-400">${c.esp_ble_count || 0}</span>`);
+    }
+
+    // Unique — session aggregate, only meaningful for a lone companion.
+    if (c.connected && single && !(isPiglet && !isCoord)) {
+        chips.push(`<span class="text-xs text-gray-400">Unique:</span>
+            <span class="text-xs font-bold text-cyan-400">${status.serial_unique || 0}</span>`);
+    }
+
+    // Mesh node count — Piglet Core / Coordinator.
+    if (c.connected && c.mesh_node_count > 0) {
+        chips.push(`${sep}
+            <span class="text-xs text-gray-400">Mesh:</span>
+            <span class="text-xs font-bold text-orange-400">${c.mesh_node_count}</span>
+            <span class="text-xs text-gray-500">nodes</span>`);
+    }
+
+    let alertHtml = '';
+    if (c.connected && Array.isArray(c.esp_alerts) && c.esp_alerts.length > 0) {
+        const latest = c.esp_alerts[c.esp_alerts.length - 1];
+        alertHtml = `<span class="text-xs font-bold text-red-400 ml-2">⚠️ ${escapeHtml(latest.alert || '')}</span>`;
+    }
+
+    const statusText = c.connected
+        ? ''
+        : '<span class="text-xs text-gray-400">Ragnar looking for Huginn or Piglet...</span>';
+
+    return `<div class="bg-slate-800/40 border border-slate-700 rounded-lg px-4 py-2 flex items-center gap-3 flex-wrap">
+            <span class="text-xs font-bold text-purple-400">${escapeHtml(name)}</span>
+            ${statusText}
+            <span class="w-2 h-2 rounded-full ${dotColor} animate-pulse"></span>
+            ${chips.join('\n')}
+            ${alertHtml}
+        </div>${_coordNodesHtml(c)}`;
+}
+
+// Per-node breakdown for a Piglet Coordinator / Core, rendered beneath its bar.
+function _coordNodesHtml(c) {
+    const nodes = Array.isArray(c.coordinator_nodes) ? c.coordinator_nodes : [];
+    if (nodes.length === 0) return '';
     const total = nodes.length;
     const totalRx = nodes.reduce((a, n) => a + (n.records_rx || 0), 0);
-    const countEl = document.getElementById('wd-coord-nodes-count');
-    if (countEl) countEl.textContent =
-        `${total} connected — ${totalRx.toLocaleString()} records total`;
-    const boardEl = document.getElementById('wd-coord-board');
-    if (boardEl) {
-        const parts = [];
-        if (status.coordinator_board) parts.push(status.coordinator_board);
-        if (status.coordinator_fw)    parts.push(status.coordinator_fw);
-        boardEl.textContent = parts.join(' · ');
-    }
-    // Render one chip per node
-    list.innerHTML = nodes.map(n => {
-        const mac   = (n.mac || '').toUpperCase();
-        const short = mac.length >= 5
-            ? mac.slice(-5)  // "XX:XX" last 4 hex chars + colon
-            : (mac || '?');
-        const rx    = (n.records_rx || 0).toLocaleString();
-        const age   = Number(n.age_s || 0);
+    const boardParts = [];
+    if (c.coordinator_board) boardParts.push(c.coordinator_board);
+    if (c.coordinator_fw)    boardParts.push(c.coordinator_fw);
+    const chips = nodes.map(n => {
+        const mac = (n.mac || '').toUpperCase();
+        const rx  = (n.records_rx || 0).toLocaleString();
+        const age = Number(n.age_s || 0);
         let ageColor = 'text-emerald-400';
         if (age > 60)      ageColor = 'text-gray-500';
         else if (age > 30) ageColor = 'text-orange-400';
         const idx = (n.idx !== undefined) ? `#${n.idx}` : '';
         return `<span class="inline-flex items-center gap-2 bg-slate-900/60 border border-slate-700 rounded px-2 py-1">
             <span class="text-xs font-bold text-purple-300">node ${idx}</span>
-            <span class="text-xs text-gray-400 font-mono">${mac}</span>
+            <span class="text-xs text-gray-400 font-mono">${escapeHtml(mac)}</span>
             <span class="text-xs text-gray-500">·</span>
             <span class="text-xs font-bold text-cyan-400">${rx}</span>
             <span class="text-xs text-gray-500">rx</span>
@@ -15738,6 +15733,14 @@ function _renderCoordinatorNodes(status) {
             <span class="text-xs ${ageColor}">${age}s</span>
         </span>`;
     }).join('');
+    return `<div class="bg-slate-800/30 border border-slate-700 rounded-lg px-4 py-2">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="text-xs font-bold text-orange-400">🌐 Mesh nodes</span>
+                <span class="text-xs text-gray-400">${total} connected — ${totalRx.toLocaleString()} records total</span>
+                <span class="text-xs text-gray-500 ml-auto">${escapeHtml(boardParts.join(' · '))}</span>
+            </div>
+            <div class="flex flex-wrap gap-2">${chips}</div>
+        </div>`;
 }
 
 function _renderWifiAdaptersBar(status) {
@@ -16314,7 +16317,9 @@ function updateSerialStatus(status) {
 function _updateHuginnConfigBadge(status) {
     const stateEl = document.getElementById('wd-huginn-config-state');
     if (!stateEl) return;
-    const isHuginn = status && status.companion_name === 'Huginn' && status.serial_connected;
+    const companions = Array.isArray(status && status.companions) ? status.companions : [];
+    const isHuginn = companions.some(c => c.connected && c.name === 'Huginn')
+        || (status && status.companion_name === 'Huginn' && status.serial_connected);
     if (isHuginn) {
         stateEl.textContent = 'Live (Huginn connected)';
         stateEl.className = 'text-xs px-2 py-0.5 rounded-full bg-green-900 text-green-400';
