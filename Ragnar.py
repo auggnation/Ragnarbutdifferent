@@ -53,6 +53,10 @@ class Ragnar:
         # Reference to display instance (will be set when display is started)
         self.display = None
 
+        # Web portal lifecycle management (stop during wardriving without WiFi)
+        self._web_portal_lock = threading.Lock()
+        self._web_thread_ref = None  # Reference to current web server thread
+
         # PiSugar button listener (for Ragnar/Pwnagotchi swap via hardware button)
         self.pisugar_listener = None
         try:
@@ -184,6 +188,43 @@ class Ragnar:
             webapp_modern._wardriving_engine = self._wd_engine
         except Exception as e:
             logger.error(f"Failed to auto-start wardriving on boot: {e}")
+
+    def start_web_portal(self):
+        """Start the web portal if not already running (called when WiFi connects during wardriving)."""
+        if not self.shared_data.config.get('websrv', True):
+            return False
+        with self._web_portal_lock:
+            if self._web_thread_ref and self._web_thread_ref.is_alive():
+                logger.debug("Web portal already running, skipping start")
+                return False
+            logger.info("Starting web portal (WiFi connected during wardriving)...")
+            self.shared_data.webapp_should_exit = False
+            from webapp_modern import run_server
+            t = threading.Thread(target=run_server, daemon=True, name="web-server")
+            t.start()
+            self._web_thread_ref = t
+            self.shared_data.web_portal_active = True
+            logger.info("Web portal started")
+            return True
+
+    def stop_web_portal(self):
+        """Stop the web portal to save memory (called when WiFi drops during wardriving)."""
+        with self._web_portal_lock:
+            if not self._web_thread_ref or not self._web_thread_ref.is_alive():
+                logger.debug("Web portal not running, skipping stop")
+                self.shared_data.web_portal_active = False
+                return False
+            logger.info("Stopping web portal to save memory (wardriving without WiFi)...")
+            self.shared_data.webapp_should_exit = True
+            try:
+                import webapp_modern
+                webapp_modern.socketio.stop()
+            except Exception as e:
+                logger.warning(f"socketio.stop() error: {e}")
+            self._web_thread_ref.join(timeout=5)
+            self.shared_data.web_portal_active = False
+            logger.info("Web portal stopped")
+            return True
 
     def stop(self):
         """Stop Ragnar and cleanup all resources."""
@@ -329,7 +370,7 @@ if __name__ == "__main__":
         if shared_data.config["websrv"]:
             logger.info("Starting the web server...")
             from webapp_modern import run_server
-            web_thread = threading.Thread(target=run_server, daemon=True)
+            web_thread = threading.Thread(target=run_server, daemon=True, name="web-server")
             web_thread.start()
         else:
             web_thread = None
@@ -345,6 +386,10 @@ if __name__ == "__main__":
         # Link display instance to ragnar instance
         if hasattr(shared_data, 'display_instance'):
             ragnar.display = shared_data.display_instance
+
+        # Register web thread with Ragnar instance for portal lifecycle management
+        ragnar._web_thread_ref = web_thread
+        shared_data.web_portal_active = web_thread is not None
 
         ragnar_thread = threading.Thread(target=ragnar.run)
         ragnar_thread.start()

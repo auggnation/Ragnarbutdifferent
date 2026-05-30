@@ -1506,6 +1506,32 @@ class WardrivingEngine:
             'gps_port': self._gps.port if gps_ok else None
         }
 
+    def _trigger_wifi_reconnect_on_disconnect(self, source: str, port: str):
+        """Attempt WiFi reconnect after a companion or USB antenna disconnects.
+
+        Only acts when not already connected to WiFi and not in AP mode; runs
+        in a daemon thread so the serial listener can continue its retry loop.
+        """
+        try:
+            if getattr(self.shared_data, 'wifi_connected', False):
+                return  # Already on WiFi — nothing to do
+            ragnar = getattr(self.shared_data, 'ragnar_instance', None)
+            if ragnar and hasattr(ragnar, 'wifi_manager'):
+                wm = ragnar.wifi_manager
+                if getattr(wm, 'ap_mode_active', False):
+                    return  # Don't disrupt an active AP session
+                logger.info(
+                    f"[wardriving] {source} on {port} disconnected — "
+                    "triggering WiFi reconnect attempt"
+                )
+                threading.Thread(
+                    target=wm._endless_loop_wifi_search,
+                    daemon=True,
+                    name="wifi-reconnect-companion-unplug",
+                ).start()
+        except Exception as exc:
+            logger.warning(f"[wardriving] WiFi reconnect trigger failed: {exc}")
+
     def stop(self):
         """Stop the current wardriving session."""
         if not self._running:
@@ -3166,6 +3192,8 @@ class WardrivingEngine:
             except Exception as e:
                 companion.connected = False
                 logger.warning(f"[wardriving] Listener iteration died ({companion.port}): {e!r}")
+                # Companion unplugged — try to reconnect to known WiFi if not connected
+                self._trigger_wifi_reconnect_on_disconnect("companion", companion.port)
                 for _ in range(5):
                     if not self._running or companion.port not in self._companions:
                         break

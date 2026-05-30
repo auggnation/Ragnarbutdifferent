@@ -461,17 +461,20 @@ class WiFiManager:
     def start(self):
         """Start the Wi-Fi management system with endless loop behavior"""
         self.logger.info("Starting Wi-Fi Manager with Endless Loop behavior...")
-        
+
         # Mark boot completion time for endless loop timing
         self.boot_completed_time = time.time()
-        
+
         # Create a restart detection file to help identify service restarts
         self._create_restart_marker()
-        
+
         # Start monitoring thread
         if not self.monitoring_thread or not self.monitoring_thread.is_alive():
             self.monitoring_thread = threading.Thread(target=self._endless_loop_monitoring, daemon=True)
             self.monitoring_thread.start()
+
+        # Start USB interface monitor to detect antenna/adapter disconnect events
+        self._start_usb_interface_monitor()
         
         # Initial connection assessment and endless loop startup
         self._initial_endless_loop_sequence()
@@ -581,6 +584,99 @@ class WiFiManager:
             self.logger.warning(f"Could not check restart marker: {e}")
             return False
     
+    # ============================================================================
+    # USB INTERFACE MONITOR — detect antenna/adapter hot-unplug events
+    # ============================================================================
+
+    def _get_wifi_interfaces_sysfs(self):
+        """Return the set of WiFi interface names visible in /sys/class/net/."""
+        ifaces = set()
+        try:
+            for name in os.listdir('/sys/class/net/'):
+                base = f'/sys/class/net/{name}'
+                if os.path.exists(f'{base}/wireless') or os.path.exists(f'{base}/phy80211'):
+                    ifaces.add(name)
+        except Exception:
+            pass
+        return ifaces
+
+    def _start_usb_interface_monitor(self):
+        """Start a background thread that watches for WiFi interface disappearance."""
+        t = threading.Thread(
+            target=self._usb_interface_monitor_loop,
+            daemon=True,
+            name="usb-iface-monitor",
+        )
+        t.start()
+
+    def _usb_interface_monitor_loop(self):
+        """Poll /sys/class/net/ every 5 s; trigger reconnect when a WiFi interface vanishes."""
+        prev_ifaces = self._get_wifi_interfaces_sysfs()
+        while not self.should_exit:
+            time.sleep(5)
+            try:
+                current_ifaces = self._get_wifi_interfaces_sysfs()
+                disappeared = prev_ifaces - current_ifaces
+                if disappeared:
+                    self.logger.warning(
+                        f"WiFi interface(s) disappeared (unplugged?): {disappeared}"
+                    )
+                    if not self.wifi_connected and not self.ap_mode_active:
+                        self.logger.info(
+                            "USB antenna removed while disconnected — triggering WiFi reconnect"
+                        )
+                        threading.Thread(
+                            target=self._endless_loop_wifi_search,
+                            daemon=True,
+                            name="wifi-reconnect-usb-unplug",
+                        ).start()
+                prev_ifaces = current_ifaces
+            except Exception as e:
+                self.logger.debug(f"USB interface monitor error: {e}")
+
+    # ============================================================================
+    # WARDRIVING / WEB PORTAL COORDINATION
+    # ============================================================================
+
+    def _is_wardriving_active(self):
+        """Return True if the wardriving engine is currently running."""
+        try:
+            ragnar = getattr(self.shared_data, 'ragnar_instance', None)
+            if ragnar and hasattr(ragnar, '_wd_engine'):
+                return getattr(ragnar._wd_engine, '_running', False)
+            import webapp_modern
+            engine = getattr(webapp_modern, '_wardriving_engine', None)
+            if engine:
+                return getattr(engine, '_running', False)
+        except Exception:
+            pass
+        return self.shared_data.config.get('wardriving_on_boot', False)
+
+    def _sync_web_portal_for_wardriving(self):
+        """Stop web portal when wardriving with no WiFi; restart when WiFi returns.
+
+        Called every monitoring iteration so the portal state converges quickly
+        regardless of how wardriving was started (boot flag, API call, etc.).
+        """
+        if not self._is_wardriving_active():
+            return
+        ragnar = getattr(self.shared_data, 'ragnar_instance', None)
+        if not ragnar:
+            return
+        portal_active = getattr(self.shared_data, 'web_portal_active', True)
+        if not self.wifi_connected and portal_active:
+            threading.Thread(
+                target=ragnar.stop_web_portal,
+                daemon=True,
+                name="web-portal-stopper",
+            ).start()
+        elif self.wifi_connected and not portal_active:
+            threading.Thread(
+                target=ragnar.start_web_portal,
+                daemon=True,
+                name="web-portal-starter",
+            ).start()
+
     def _initial_endless_loop_sequence(self):
         """Handle initial Wi-Fi connection with endless loop behavior"""
         self.logger.info("Starting Endless Loop Wi-Fi management...")
@@ -818,7 +914,10 @@ class WiFiManager:
                     ssid = self.current_ssid if self.wifi_connected else None
                     self._save_connection_state(ssid, self.wifi_connected)
                     last_state_save = current_time
-                
+
+                # Keep web portal in sync with wardriving + WiFi state
+                self._sync_web_portal_for_wardriving()
+
                 time.sleep(self.connection_check_interval)
                 
             except Exception as e:

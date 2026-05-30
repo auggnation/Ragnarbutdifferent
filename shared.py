@@ -1051,7 +1051,8 @@ class SharedData:
         self.should_exit = False
         self.display_should_exit = False
         self.orchestrator_should_exit = False
-        self.webapp_should_exit = False 
+        self.webapp_should_exit = False
+        self.web_portal_active = True  # Tracks whether the web portal is currently running
         self.ragnar_instance = None
         self.gateway_info = {}  # Populated by NetworkScanner.get_gateway_info()
         self.wifichanged = False
