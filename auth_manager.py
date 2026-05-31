@@ -266,8 +266,21 @@ class AuthManager:
             with self._get_auth_conn() as conn:
                 cursor = conn.cursor()
                 cursor.execute("SELECT COUNT(*) FROM auth")
-                count = cursor.fetchone()[0]
-                return count > 0
+                return cursor.fetchone()[0] > 0
+        except sqlite3.OperationalError as e:
+            if 'no such table' not in str(e).lower():
+                logger.error(f"Error checking auth status: {e}")
+                return False
+            with self._lock:
+                try:
+                    self._init_auth_db()
+                    with self._get_auth_conn() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT COUNT(*) FROM auth")
+                        return cursor.fetchone()[0] > 0
+                except Exception as retry_err:
+                    logger.debug(f"Auth DB initialized on demand; reporting unconfigured: {retry_err}")
+                    return False
         except Exception as e:
             logger.error(f"Error checking auth status: {e}")
             return False
