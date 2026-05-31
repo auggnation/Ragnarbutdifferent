@@ -4561,6 +4561,16 @@
                                 <h5 class="text-sm font-semibold text-fuchsia-300 uppercase tracking-wide pt-2">Personality</h5>
                                 <div class="flex items-center justify-between">
                                     <div>
+                                        <label class="text-xs text-gray-400">Start in Manual Mode</label>
+                                        <p class="text-xs text-gray-500">Boot paused (MANU), no auto-hunting</p>
+                                    </div>
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" id="pwn-manual-mode" class="sr-only peer">
+                                        <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-fuchsia-600"></div>
+                                    </label>
+                                </div>
+                                <div class="flex items-center justify-between">
+                                    <div>
                                         <label class="text-xs text-gray-400">Deauth Attacks</label>
                                         <p class="text-xs text-gray-500">Send deauth to capture handshakes</p>
                                     </div>
@@ -5120,7 +5130,7 @@
     </div>
 
     <!-- JavaScript -->
-    <script src="/web/scripts/ragnar_modern.js?v=20260530b"></script>
+    <script src="/web/scripts/ragnar_modern.js?v=20260531a"></script>
 
 </body>
 </html>

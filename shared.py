@@ -733,6 +733,7 @@ class SharedData:
             "__title_pwnagotchi__": "Pwnagotchi Integration",
             "pwnagotchi_installed": False,
             "pwnagotchi_mode": "ragnar",
+            "pwnagotchi_manual_mode": False,
             "pwnagotchi_last_switch": "",
             "pwnagotchi_last_status": "Not installed",
 

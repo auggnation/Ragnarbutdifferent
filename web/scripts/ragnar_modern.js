@@ -4687,6 +4687,17 @@ async function loadPwnConfig() {
         _setPwnCfgChecked('pwn-cfg-memtemp', cfg['main.plugins.memtemp.enabled']);
         _setPwnCfgChecked('pwn-cfg-grid', cfg['main.plugins.grid.enabled']);
         _setPwnCfgChecked('pwn-cfg-fix-services', cfg['main.plugins.fix_services.enabled']);
+
+        // Manual mode is a launcher flag, not a TOML key, so it has its own endpoint.
+        try {
+            const manualResp = await fetchAPI('/api/pwnagotchi/manual-mode');
+            if (manualResp && manualResp.success) {
+                _setPwnCfgChecked('pwn-manual-mode', manualResp.enabled);
+            }
+        } catch (manualErr) {
+            console.error('Error loading Pwnagotchi manual mode:', manualErr);
+        }
+
         _showPwnConfigAlert(alert, 'Configuration loaded', 'success');
         setTimeout(() => { if (alert) alert.classList.add('hidden'); }, 2000);
     } catch (error) {
@@ -4728,6 +4739,17 @@ async function savePwnConfig() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ config })
         });
+
+        // Manual mode is a launcher flag, not a TOML key, so it saves separately.
+        const manualEnabled = document.getElementById('pwn-manual-mode')?.checked || false;
+        const manualResponse = await fetchAPI('/api/pwnagotchi/manual-mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: manualEnabled })
+        });
+        if (manualResponse && manualResponse.success) {
+            pwnStatus.manual_mode = manualEnabled;
+        }
 
         if (response && response.success) {
             _showPwnConfigAlert(alert, `Saved ${response.updated?.length || 0} setting(s). Changes apply on next Pwnagotchi start.`, 'success');

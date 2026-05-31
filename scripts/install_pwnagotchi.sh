@@ -451,17 +451,35 @@ for candidate in "${launcher_candidates[@]}"; do
     fi
 done
 
-if [[ -n "$launcher_target" ]]; then
-    cat > /usr/bin/pwnagotchi-launcher <<EOF
+if [[ -z "$launcher_target" ]]; then
+    echo "[WARN] Could not determine pwnagotchi binary path; defaulting to /usr/local/bin/pwnagotchi"
+    launcher_target="/usr/local/bin/pwnagotchi"
+fi
+
+# Flag-aware launcher: honors MANU/AUTO boot flags so the service can start
+# Pwnagotchi paused. One-shot flags (Pwnagotchi web UI / Ragnar) win and are
+# consumed on read; the persistent file keeps every launch in manual mode.
+cat > /usr/bin/pwnagotchi-launcher <<EOF
 #!/bin/bash
+# ragnar-managed flag-aware launcher
+MANUAL=0
+if [[ -f "/root/.pwnagotchi-manual" ]]; then
+    rm -f "/root/.pwnagotchi-manual" "/root/.pwnagotchi-auto"
+    MANUAL=1
+elif [[ -f "/root/.pwnagotchi-auto" ]]; then
+    rm -f "/root/.pwnagotchi-auto"
+    MANUAL=0
+elif [[ -f "/etc/pwnagotchi/.ragnar-manual-mode" ]]; then
+    MANUAL=1
+fi
+if [[ "\$MANUAL" == "1" ]]; then
+    exec ${launcher_target} --manual "\$@"
+fi
 exec ${launcher_target} "\$@"
 EOF
-    chmod 755 /usr/bin/pwnagotchi-launcher
-    chown root:root /usr/bin/pwnagotchi-launcher
-    echo "[INFO] Launcher wrapper -> ${launcher_target}"
-else
-    echo "[WARN] Could not determine pwnagotchi binary path"
-fi
+chmod 755 /usr/bin/pwnagotchi-launcher
+chown root:root /usr/bin/pwnagotchi-launcher
+echo "[INFO] Flag-aware launcher wrapper -> ${launcher_target}"
 
 # -------------------------------------------------------------------
 # SYSTEMD SERVICES (all with timeouts to prevent hanging)
@@ -476,7 +494,7 @@ After=multi-user.target network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/pwnagotchi
+ExecStart=/usr/bin/pwnagotchi-launcher
 WorkingDirectory=${PWN_DIR}
 Restart=on-failure
 RestartSec=5

@@ -45,6 +45,7 @@ rm -f /usr/bin/monstart
 rm -f /usr/bin/monstop
 rm -f /usr/local/bin/pwngrid
 rm -f /usr/local/bin/ragnar-swap-button
+rm -f /root/.pwnagotchi-manual /root/.pwnagotchi-auto
 
 # Remove Pillow shim
 SITE=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null || echo "")

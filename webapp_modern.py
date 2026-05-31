@@ -152,6 +152,13 @@ MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 PWN_INSTALL_SCRIPT = os.path.join(shared_data.currentdir, 'scripts', 'install_pwnagotchi.sh')
 PWN_SERVICE_FILE = '/etc/systemd/system/pwnagotchi.service'
 PWN_CONFIG_FILE = '/etc/pwnagotchi/config.toml'
+PWN_LAUNCHER_PATH = '/usr/bin/pwnagotchi-launcher'
+# One-shot boot flags written by the Pwnagotchi web UI (MANU/AUTO buttons) or by
+# Ragnar. The launcher consumes them on read. The persistent file keeps every
+# Pwnagotchi launch in manual mode until the Ragnar toggle is turned off.
+PWN_MANUAL_ONESHOT_FLAG = '/root/.pwnagotchi-manual'
+PWN_AUTO_ONESHOT_FLAG = '/root/.pwnagotchi-auto'
+PWN_MANUAL_PERSIST_FILE = '/etc/pwnagotchi/.ragnar-manual-mode'
 PWN_SWAP_DELAY_SECONDS = 1
 PWN_INSTALL_STALE_SECONDS = 600  # Treat installer as stale after 10 minutes
 PWN_SWITCH_STALE_SECONDS = 60  # Consider switch stuck after 60 seconds
@@ -638,6 +645,7 @@ def _build_pwnagotchi_status(persist: bool = True) -> dict:
         'installed': os.path.isdir('/opt/pwnagotchi') and os.path.exists(PWN_SERVICE_FILE),
         'installing': False,
         'mode': shared_data.config.get('pwnagotchi_mode', 'ragnar'),
+        'manual_mode': bool(shared_data.config.get('pwnagotchi_manual_mode', False)),
         'last_switch': shared_data.config.get('pwnagotchi_last_switch', ''),
         'service_active': False,
         'service_enabled': False,
@@ -920,37 +928,135 @@ def _collect_service_status(service_name: str) -> str:
         return f"Unable to collect status for {service_name}: {exc}"
 
 
-def _ensure_pwn_launcher() -> None:
-    """Ensure /usr/bin/pwnagotchi-launcher exists and is executable."""
-    launcher_path = '/usr/bin/pwnagotchi-launcher'
+# Marker identifying a launcher that already contains the manual-mode logic.
+# Kept identical to the comment written by scripts/install_pwnagotchi.sh so an
+# installer-written launcher is recognised and left untouched.
+_PWN_LAUNCHER_MARKER = '# ragnar-managed flag-aware launcher'
+
+
+def _resolve_pwnagotchi_binary() -> Optional[str]:
+    """Locate the real pwnagotchi entry point, never the Ragnar launcher shim."""
+    candidates = [
+        shutil.which('pwnagotchi'),
+        '/usr/local/bin/pwnagotchi',
+        '/usr/bin/pwnagotchi',
+    ]
+    for candidate in candidates:
+        if candidate and candidate != PWN_LAUNCHER_PATH and os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def _pwn_launcher_script(target: str) -> str:
+    return (
+        "#!/bin/bash\n"
+        f"{_PWN_LAUNCHER_MARKER}\n"
+        "# One-shot flags (Pwnagotchi web UI / Ragnar) win and are consumed on\n"
+        "# read; the persistent file keeps every launch in manual mode.\n"
+        "MANUAL=0\n"
+        f'if [[ -f "{PWN_MANUAL_ONESHOT_FLAG}" ]]; then\n'
+        f'    rm -f "{PWN_MANUAL_ONESHOT_FLAG}" "{PWN_AUTO_ONESHOT_FLAG}"\n'
+        "    MANUAL=1\n"
+        f'elif [[ -f "{PWN_AUTO_ONESHOT_FLAG}" ]]; then\n'
+        f'    rm -f "{PWN_AUTO_ONESHOT_FLAG}"\n'
+        "    MANUAL=0\n"
+        f'elif [[ -f "{PWN_MANUAL_PERSIST_FILE}" ]]; then\n'
+        "    MANUAL=1\n"
+        "fi\n"
+        'if [[ "$MANUAL" == "1" ]]; then\n'
+        f'    exec {target} --manual "$@"\n'
+        "fi\n"
+        f'exec {target} "$@"\n'
+    )
+
+
+def _ensure_pwn_service_uses_launcher() -> None:
+    """Point pwnagotchi.service ExecStart at the flag-aware launcher.
+
+    Migrates older installs whose unit execs the pwnagotchi binary directly so
+    the manual-mode flags are honored without a reinstall.
+    """
+    if not os.path.exists(PWN_SERVICE_FILE) or not os.path.exists(PWN_LAUNCHER_PATH):
+        return
     try:
-        if os.path.exists(launcher_path):
-            if os.access(launcher_path, os.X_OK):
-                return
-            os.chmod(launcher_path, 0o755)
-            logger.info(f"Repaired permissions for {launcher_path}")
-            return
+        with open(PWN_SERVICE_FILE, 'r', encoding='utf-8') as handle:
+            content = handle.read()
+    except Exception as exc:
+        logger.error(f"Unable to read {PWN_SERVICE_FILE}: {exc}")
+        return
 
-        candidates = [
-            shutil.which('pwnagotchi'),
-            shutil.which('pwnagotchi-launcher'),
-            '/usr/local/bin/pwnagotchi',
-            '/usr/local/bin/pwnagotchi-launcher'
-        ]
-        target = next((c for c in candidates if c and os.path.exists(c)), None)
-        if not target:
-            logger.warning("Unable to locate pwnagotchi binary; launcher shim not created")
-            return
+    if re.search(r'^ExecStart=' + re.escape(PWN_LAUNCHER_PATH) + r'\s*$', content, re.M):
+        return
 
-        script = f"#!/bin/bash\nexec {target} \"$@\"\n"
-        with open(launcher_path, 'w', encoding='utf-8') as handle:
-            handle.write(script)
-        os.chmod(launcher_path, 0o755)
-        logger.info(f"Created pwnagotchi launcher shim at {launcher_path} → {target}")
+    new_content, count = re.subn(
+        r'^ExecStart=.*$', f'ExecStart={PWN_LAUNCHER_PATH}', content, count=1, flags=re.M
+    )
+    if not count or new_content == content:
+        return
+
+    try:
+        with open(PWN_SERVICE_FILE, 'w', encoding='utf-8') as handle:
+            handle.write(new_content)
+        subprocess.run(
+            ['systemctl', 'daemon-reload'], check=False,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15
+        )
+        logger.info("Migrated pwnagotchi.service ExecStart to flag-aware launcher")
+    except Exception as exc:
+        logger.error(f"Failed to migrate pwnagotchi.service ExecStart: {exc}")
+
+
+def _ensure_pwn_launcher() -> None:
+    """Ensure /usr/bin/pwnagotchi-launcher is the flag-aware wrapper, executable,
+    and referenced by pwnagotchi.service so manual-mode flags take effect."""
+    try:
+        needs_write = True
+        if os.path.exists(PWN_LAUNCHER_PATH):
+            try:
+                with open(PWN_LAUNCHER_PATH, 'r', encoding='utf-8') as handle:
+                    needs_write = _PWN_LAUNCHER_MARKER not in handle.read()
+            except Exception:
+                needs_write = True
+
+        if needs_write:
+            target = _resolve_pwnagotchi_binary()
+            if not target:
+                logger.warning("Unable to locate pwnagotchi binary; launcher shim not updated")
+            else:
+                with open(PWN_LAUNCHER_PATH, 'w', encoding='utf-8') as handle:
+                    handle.write(_pwn_launcher_script(target))
+                logger.info(f"Wrote flag-aware pwnagotchi launcher at {PWN_LAUNCHER_PATH} → {target}")
+
+        if os.path.exists(PWN_LAUNCHER_PATH) and not os.access(PWN_LAUNCHER_PATH, os.X_OK):
+            os.chmod(PWN_LAUNCHER_PATH, 0o755)
+
+        _ensure_pwn_service_uses_launcher()
     except PermissionError as exc:
         logger.error(f"Permission error while ensuring pwnagotchi launcher: {exc}")
     except Exception as exc:  # pragma: no cover - defensive guard
         logger.error(f"Failed to prepare pwnagotchi launcher: {exc}")
+
+
+def _set_pwn_manual_mode(enabled: bool) -> None:
+    """Persist the Ragnar manual-mode preference and mirror it to the
+    launcher-readable flag file under /etc/pwnagotchi."""
+    enabled = bool(enabled)
+    try:
+        if enabled:
+            os.makedirs(os.path.dirname(PWN_MANUAL_PERSIST_FILE), exist_ok=True)
+            with open(PWN_MANUAL_PERSIST_FILE, 'w', encoding='utf-8') as handle:
+                handle.write('')
+            # Drop a stale one-shot AUTO flag so it can't override the toggle.
+            if os.path.exists(PWN_AUTO_ONESHOT_FLAG):
+                os.remove(PWN_AUTO_ONESHOT_FLAG)
+        else:
+            if os.path.exists(PWN_MANUAL_PERSIST_FILE):
+                os.remove(PWN_MANUAL_PERSIST_FILE)
+            if os.path.exists(PWN_MANUAL_ONESHOT_FLAG):
+                os.remove(PWN_MANUAL_ONESHOT_FLAG)
+    except Exception as exc:
+        logger.error(f"Failed to update Pwnagotchi manual-mode flag: {exc}")
+    _update_pwn_config({'pwnagotchi_manual_mode': enabled})
 
 
 def _unit_name(service_name: str) -> str:
@@ -1227,6 +1333,9 @@ def _execute_pwn_mode_switch(target_mode: str) -> None:
 
     if target_mode == 'pwnagotchi':
         _ensure_pwn_launcher()
+        # Re-sync the launcher-readable flag with the saved preference so the
+        # service starts in the mode the user selected in the web UI.
+        _set_pwn_manual_mode(bool(shared_data.config.get('pwnagotchi_manual_mode', False)))
 
         # Stop the display loop FIRST so it doesn't overwrite the transition message.
         # E-paper retains its image without power, so the message stays visible.
@@ -8496,6 +8605,11 @@ def swap_to_pwnagotchi_mode():
         if target_mode == status.get('mode', 'ragnar') and target_mode == 'pwnagotchi':
             return jsonify({'success': False, 'error': 'Already scheduled for Pwnagotchi mode'}), 409
 
+        # Persist the requested boot mode when supplied so the handoff starts
+        # Pwnagotchi paused (MANU) instead of auto-hunting.
+        if 'manual' in data:
+            _set_pwn_manual_mode(bool(data.get('manual')))
+
         if target_mode == 'pwnagotchi':
             message = 'Ragnar service will stop and Pwnagotchi will start. Reboot to return to Ragnar.'
         else:
@@ -8517,6 +8631,31 @@ def swap_to_pwnagotchi_mode():
 
     except Exception as e:
         logger.error(f"Error scheduling Pwnagotchi swap: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/pwnagotchi/manual-mode', methods=['GET'])
+def get_pwnagotchi_manual_mode():
+    """Return whether Pwnagotchi is set to start in manual (MANU) mode."""
+    return jsonify({
+        'success': True,
+        'enabled': bool(shared_data.config.get('pwnagotchi_manual_mode', False))
+    })
+
+
+@app.route('/api/pwnagotchi/manual-mode', methods=['POST'])
+def set_pwnagotchi_manual_mode():
+    """Toggle whether Pwnagotchi starts in manual (MANU) mode on its next launch."""
+    try:
+        data = request.get_json(silent=True) or {}
+        enabled = bool(data.get('enabled'))
+        _set_pwn_manual_mode(enabled)
+        logger.info(f"Pwnagotchi manual mode set to {enabled}")
+        message = ('Pwnagotchi will start in manual mode on its next launch.'
+                   if enabled else 'Pwnagotchi will start in auto mode on its next launch.')
+        return jsonify({'success': True, 'enabled': enabled, 'message': message})
+    except Exception as e:
+        logger.error(f"Error setting Pwnagotchi manual mode: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

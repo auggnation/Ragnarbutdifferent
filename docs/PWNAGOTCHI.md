@@ -164,6 +164,20 @@ Adapt the exact commands to your nexmon version and kernel.
    ```
 3. Ragnar cleans up leftover state on startup (removes `mon0`, stops any lingering services)
 
+### Manual (MANU) vs Auto mode
+
+By default Pwnagotchi boots in **AUTO** mode and immediately starts hunting handshakes. To boot it **paused** in **MANU** mode instead, enable **Start in Manual mode** in the **Swap Control** card (Config tab → Pwnagotchi Bridge) *before* switching. The preference persists and applies to every subsequent Pwnagotchi launch (swap, button, or reboot) until you turn it off.
+
+**How it works:** the Ragnar-managed launcher (`/usr/bin/pwnagotchi-launcher`, the `ExecStart` of `pwnagotchi.service`) checks for boot-mode flags before starting Pwnagotchi:
+
+| Flag | Effect | Lifetime |
+|------|--------|----------|
+| `/root/.pwnagotchi-manual` | start with `--manual` | one-shot (deleted on read) |
+| `/root/.pwnagotchi-auto` | force AUTO this boot | one-shot (deleted on read) |
+| `/etc/pwnagotchi/.ragnar-manual-mode` | start with `--manual` | persistent (Ragnar toggle) |
+
+The one-shot flags are what Pwnagotchi's own web UI MANU/AUTO buttons write, so those now stick across the restart they trigger. The persistent file is managed by the Ragnar toggle.
+
 ### Button Reference
 
 | Button Action | While Ragnar is running | While Pwnagotchi is running |
@@ -181,7 +195,9 @@ Adapt the exact commands to your nexmon version and kernel.
 | `GET`  | `/api/pwnagotchi/status` | Install state, current mode, metadata |
 | `POST` | `/api/pwnagotchi/install` | Start the installer |
 | `GET`  | `/api/pwnagotchi/logs` | Stream installer/service logs |
-| `POST` | `/api/pwnagotchi/swap` | Schedule mode switch |
+| `POST` | `/api/pwnagotchi/swap` | Schedule mode switch (accepts `manual` boolean) |
+| `GET`  | `/api/pwnagotchi/manual-mode` | Whether Pwnagotchi boots in MANU mode |
+| `POST` | `/api/pwnagotchi/manual-mode` | Toggle MANU boot mode (`enabled` boolean) |
 
 ---
 

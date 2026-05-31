@@ -153,7 +153,7 @@ SERVICE_FILE="/etc/systemd/system/pwnagotchi.service"
 if [[ -f "$SERVICE_FILE" ]]; then
     if grep -q '\-\-config' "$SERVICE_FILE"; then
         echo "[MIGRATE] Updating systemd service (removing --config flag)..."
-        sed -i 's|ExecStart=.*pwnagotchi.*|ExecStart=/usr/local/bin/pwnagotchi|' "$SERVICE_FILE"
+        sed -i 's|ExecStart=.*pwnagotchi.*|ExecStart=/usr/bin/pwnagotchi-launcher|' "$SERVICE_FILE"
         systemctl daemon-reload
     fi
 fi
