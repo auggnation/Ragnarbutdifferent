@@ -354,6 +354,9 @@
                     <button onclick="showTab('threat-intel')" class="nav-btn px-3 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-[15px] whitespace-nowrap" data-tab="threat-intel">
                         Threat Intel
                     </button>
+                    <button onclick="showTab('compliance')" class="nav-btn px-3 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-[15px] whitespace-nowrap" data-tab="compliance">
+                        Compliance
+                    </button>
                     <button onclick="showTab('traffic')" class="nav-btn px-3 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-[15px] whitespace-nowrap server-mode-feature hidden" data-tab="traffic">
                         <span class="flex items-center space-x-1">
                             <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -424,6 +427,7 @@
                     Pentest
                 </button>
                 <button onclick="showTab('threat-intel')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Threat Intel</button>
+                <button onclick="showTab('compliance')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Compliance</button>
                 <button onclick="showTab('traffic')" data-tab="traffic" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 server-mode-feature hidden">Traffic Analysis</button>
                 <button onclick="showTab('adv-vuln')" data-tab="adv-vuln" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 server-mode-feature hidden">Adv Scan</button>
                 <button onclick="showTab('wardriving')" data-tab="wardriving" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 wardriving-feature hidden">Wardriving</button>
@@ -2296,6 +2300,33 @@
         </div>
         
         <!-- Files Tab -->
+        <div id="compliance-tab" class="tab-content hidden">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-3">
+                <div>
+                    <h2 class="text-2xl font-bold text-white">Compliance</h2>
+                    <p class="text-sm text-gray-400">CIS hardening &amp; PCI DSS mapping from Lynis audits + scan findings</p>
+                </div>
+                <div class="flex items-center gap-2 flex-wrap">
+                    <div class="inline-flex rounded-lg overflow-hidden border border-slate-600">
+                        <button id="compliance-tab-cis" onclick="setComplianceFramework('cis')" class="px-4 py-1.5 text-sm bg-Ragnar-600 text-white">CIS</button>
+                        <button id="compliance-tab-pci" onclick="setComplianceFramework('pci')" class="px-4 py-1.5 text-sm bg-slate-700 text-gray-300 hover:bg-slate-600">PCI DSS</button>
+                    </div>
+                    <button onclick="refreshComplianceData()" class="px-3 py-1.5 text-sm rounded-lg bg-slate-700 text-gray-200 hover:bg-slate-600">Refresh</button>
+                    <button onclick="exportComplianceReport()" class="px-3 py-1.5 text-sm rounded-lg bg-Ragnar-600 text-white hover:bg-Ragnar-500">Export HTML</button>
+                </div>
+            </div>
+
+            <div class="glass rounded-lg p-3 mb-4 border-l-4 border-yellow-500 text-xs text-gray-300">
+                <strong class="text-yellow-400">Informal / internal report.</strong>
+                Mappings are a curated subset. This is not a certified CIS-CAT assessment or PCI DSS ASV scan, and findings are not false-positive validated.
+            </div>
+
+            <div id="compliance-summary" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4"></div>
+            <div id="compliance-results" class="glass rounded-xl p-4 overflow-x-auto">
+                <p class="text-gray-500 text-sm">Loading…</p>
+            </div>
+        </div>
+
         <div id="files-tab" class="tab-content hidden">
             <div class="glass rounded-xl p-6">
                 <div class="flex items-center justify-between mb-6">
@@ -5130,7 +5161,7 @@
     </div>
 
     <!-- JavaScript -->
-    <script src="/web/scripts/ragnar_modern.js?v=20260531a"></script>
+    <script src="/web/scripts/ragnar_modern.js?v=20260531b"></script>
 
 </body>
 </html>

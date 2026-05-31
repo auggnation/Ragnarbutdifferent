@@ -1229,6 +1229,9 @@ async function loadTabData(tabName) {
         case 'credentials':
             loadCredentials();
             break;
+        case 'compliance':
+            loadComplianceData();
+            break;
     }
 }
 
@@ -8966,6 +8969,150 @@ async function downloadPentestReport() {
         console.error('Report download error:', error);
         addConsoleMessage(`Failed to download report: ${error.message}`, 'error');
     }
+}
+
+// ============================================================================
+// COMPLIANCE – CIS / PCI DSS reporting
+// ============================================================================
+
+let complianceFramework = 'cis';
+
+function complianceEscape(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+        {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+    ));
+}
+
+function complianceStatusBadge(status) {
+    const map = {
+        attention: ['Action needed', 'text-red-400'],
+        review: ['Review', 'text-yellow-400'],
+        ok: ['No issues', 'text-green-400'],
+        not_assessed: ['Not assessed', 'text-gray-400'],
+    };
+    const [label, cls] = map[status] || [status, 'text-gray-400'];
+    return `<span class="${cls} font-semibold">${label}</span>`;
+}
+
+function complianceStatCard(value, label, color) {
+    return `<div class="glass rounded-lg p-3 text-center">
+        <div class="text-2xl font-bold ${color || 'text-white'}">${value}</div>
+        <div class="text-xs text-gray-400 uppercase tracking-wide mt-1">${label}</div>
+    </div>`;
+}
+
+function setComplianceFramework(fw) {
+    complianceFramework = fw;
+    const cisBtn = document.getElementById('compliance-tab-cis');
+    const pciBtn = document.getElementById('compliance-tab-pci');
+    if (cisBtn && pciBtn) {
+        const active = 'px-4 py-1.5 text-sm bg-Ragnar-600 text-white';
+        const idle = 'px-4 py-1.5 text-sm bg-slate-700 text-gray-300 hover:bg-slate-600';
+        cisBtn.className = fw === 'cis' ? active : idle;
+        pciBtn.className = fw === 'pci' ? active : idle;
+    }
+    loadComplianceData();
+}
+
+function refreshComplianceData() {
+    loadComplianceData();
+}
+
+function exportComplianceReport() {
+    const a = document.createElement('a');
+    a.href = '/api/compliance/export';
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    addConsoleMessage('Compliance report exported', 'success');
+}
+
+async function loadComplianceData() {
+    const summaryEl = document.getElementById('compliance-summary');
+    const resultsEl = document.getElementById('compliance-results');
+    if (!resultsEl) return;
+    resultsEl.innerHTML = '<p class="text-gray-500 text-sm">Loading…</p>';
+    if (summaryEl) summaryEl.innerHTML = '';
+    try {
+        const data = await fetchAPI(`/api/compliance/${complianceFramework}`);
+        if (complianceFramework === 'cis') {
+            renderComplianceCIS(data, summaryEl, resultsEl);
+        } else {
+            renderCompliancePCI(data, summaryEl, resultsEl);
+        }
+    } catch (err) {
+        resultsEl.innerHTML = `<p class="text-red-400 text-sm">Failed to load compliance data: ${complianceEscape(err.message)}</p>`;
+    }
+}
+
+function renderComplianceCIS(data, summaryEl, resultsEl) {
+    const s = data.summary || {};
+    if (summaryEl) {
+        summaryEl.innerHTML = [
+            complianceStatCard(s.hosts_assessed || 0, 'Hosts Audited'),
+            complianceStatCard(s.controls_flagged || 0, 'Controls Flagged', 'text-red-400'),
+            complianceStatCard(s.controls_review || 0, 'Review', 'text-yellow-400'),
+            complianceStatCard(s.avg_hardening_index == null ? 'n/a' : s.avg_hardening_index, 'Avg Hardening Index'),
+        ].join('');
+    }
+    const rows = data.controls || [];
+    if (!rows.length) {
+        resultsEl.innerHTML = '<p class="text-gray-400 text-sm">No Lynis audit data found. Run a Lynis SSH audit against a host with known credentials, then refresh.</p>';
+        return;
+    }
+    let html = '<table class="w-full text-sm"><thead><tr class="text-gray-400 text-left">' +
+        '<th class="py-2 pr-3">CIS Area</th><th class="py-2 pr-3">Topic</th><th class="py-2 pr-3">Status</th>' +
+        '<th class="py-2 pr-3">Warn</th><th class="py-2 pr-3">Sugg</th><th class="py-2">Findings</th></tr></thead><tbody>';
+    rows.forEach(r => {
+        const findingList = r.findings || [];
+        const findings = findingList.slice(0, 5).map(f =>
+            `<div class="text-xs text-gray-400"><span class="font-mono text-gray-500">${complianceEscape(f.host)} · ${complianceEscape(f.code)}</span> — ${complianceEscape((f.message || '').slice(0, 120))}</div>`
+        ).join('');
+        const more = findingList.length > 5 ? `<div class="text-xs text-gray-600">…and ${findingList.length - 5} more</div>` : '';
+        html += `<tr class="border-t border-slate-700/60 align-top">
+            <td class="py-2 pr-3 text-gray-200">${complianceEscape(r.control)}</td>
+            <td class="py-2 pr-3 text-gray-300">${complianceEscape(r.title)}</td>
+            <td class="py-2 pr-3">${complianceStatusBadge(r.status)}</td>
+            <td class="py-2 pr-3 text-gray-300">${r.warnings}</td>
+            <td class="py-2 pr-3 text-gray-300">${r.suggestions}</td>
+            <td class="py-2">${findings}${more || (findings ? '' : '—')}</td>
+        </tr>`;
+    });
+    html += '</tbody></table>';
+    resultsEl.innerHTML = html;
+}
+
+function renderCompliancePCI(data, summaryEl, resultsEl) {
+    const s = data.summary || {};
+    if (summaryEl) {
+        summaryEl.innerHTML = [
+            complianceStatCard(s.requirements_total || 0, 'Requirements'),
+            complianceStatCard(s.attention || 0, 'Action Needed', 'text-red-400'),
+            complianceStatCard(s.ok || 0, 'No Issues', 'text-green-400'),
+            complianceStatCard(s.not_assessed || 0, 'Not Assessed', 'text-gray-400'),
+        ].join('');
+    }
+    const rows = data.requirements || [];
+    if (!rows.length) {
+        resultsEl.innerHTML = '<p class="text-gray-400 text-sm">No data available.</p>';
+        return;
+    }
+    let html = '<table class="w-full text-sm"><thead><tr class="text-gray-400 text-left">' +
+        '<th class="py-2 pr-3">Req</th><th class="py-2 pr-3">Title</th><th class="py-2 pr-3">Status</th>' +
+        '<th class="py-2 pr-3">Guidance</th><th class="py-2">Evidence</th></tr></thead><tbody>';
+    rows.forEach(r => {
+        const evidence = (r.evidence || []).map(x => `<div class="text-xs text-gray-400">${complianceEscape(x)}</div>`).join('') || '—';
+        html += `<tr class="border-t border-slate-700/60 align-top">
+            <td class="py-2 pr-3 font-mono text-gray-200">${complianceEscape(r.id)}</td>
+            <td class="py-2 pr-3 text-gray-300">${complianceEscape(r.title)}</td>
+            <td class="py-2 pr-3">${complianceStatusBadge(r.status)}</td>
+            <td class="py-2 pr-3 text-xs text-gray-500">${complianceEscape(r.guidance)}</td>
+            <td class="py-2">${evidence}</td>
+        </tr>`;
+    });
+    html += '</tbody></table>';
+    resultsEl.innerHTML = html;
 }
 
 // ============================================================================

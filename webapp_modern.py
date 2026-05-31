@@ -4881,6 +4881,55 @@ def export_report():
         return jsonify({'error': str(e)}), 500
 
 
+def _flatten_credentials_for_compliance():
+    try:
+        all_creds = web_utils.get_all_credentials()
+    except Exception:
+        return []
+    flat = []
+    for svc, entries in (all_creds or {}).items():
+        for entry in entries:
+            flat.append({**entry, 'service': svc})
+    return flat
+
+
+@app.route('/api/compliance/export')
+def compliance_report_export():
+    """Generate and download a self-contained HTML compliance report (CIS + PCI)."""
+    try:
+        from datetime import datetime as _dt
+        from compliance_report import ComplianceReporter, render_compliance_html
+        reporter = ComplianceReporter(shared_data=shared_data, db=getattr(shared_data, 'db', None))
+        cis = reporter.build_cis_report()
+        pci = reporter.build_pci_report(credentials=_flatten_credentials_for_compliance())
+        html_report = render_compliance_html(cis, pci)
+        filename = f"ragnar_compliance_{_dt.now().strftime('%Y%m%d_%H%M%S')}.html"
+        response = make_response(html_report)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+    except Exception as exc:
+        logger.error(f"Compliance export error: {exc}")
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/compliance/<framework>')
+def compliance_report_json(framework):
+    """Return a CIS or PCI compliance view as JSON."""
+    framework = (framework or '').lower()
+    if framework not in ('cis', 'pci'):
+        return jsonify({'error': 'Unknown framework; use cis or pci'}), 400
+    try:
+        from compliance_report import ComplianceReporter
+        reporter = ComplianceReporter(shared_data=shared_data, db=getattr(shared_data, 'db', None))
+        if framework == 'cis':
+            return jsonify(reporter.build_cis_report(host=request.args.get('host')))
+        return jsonify(reporter.build_pci_report(credentials=_flatten_credentials_for_compliance()))
+    except Exception as exc:
+        logger.error(f"Compliance report error ({framework}): {exc}")
+        return jsonify({'error': str(exc)}), 500
+
+
 @app.route('/api/vulnerability-report/<path:filename>')
 def download_vulnerability_report(filename):
     """Stream a vulnerability report file while preventing directory traversal.
