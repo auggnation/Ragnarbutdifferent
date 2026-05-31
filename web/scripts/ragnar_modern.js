@@ -1229,9 +1229,6 @@ async function loadTabData(tabName) {
         case 'credentials':
             loadCredentials();
             break;
-        case 'compliance':
-            loadComplianceData();
-            break;
     }
 }
 
@@ -8976,6 +8973,22 @@ async function downloadPentestReport() {
 // ============================================================================
 
 let complianceFramework = 'cis';
+let threatIntelSubtab = 'vulns';
+
+function showThreatIntelSubtab(which) {
+    threatIntelSubtab = which;
+    const vulns = document.getElementById('ti-sub-vulns');
+    const comp = document.getElementById('ti-sub-compliance');
+    const vBtn = document.getElementById('ti-subtab-vulns');
+    const cBtn = document.getElementById('ti-subtab-compliance');
+    if (vulns) vulns.classList.toggle('hidden', which !== 'vulns');
+    if (comp) comp.classList.toggle('hidden', which !== 'compliance');
+    const active = 'ti-subtab px-4 py-2 text-sm font-semibold border-b-2 border-Ragnar-500 text-white -mb-px';
+    const idle = 'ti-subtab px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-white -mb-px';
+    if (vBtn) vBtn.className = which === 'vulns' ? active : idle;
+    if (cBtn) cBtn.className = which === 'compliance' ? active : idle;
+    if (which === 'compliance') loadComplianceData();
+}
 
 function complianceEscape(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
