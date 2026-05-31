@@ -329,17 +329,8 @@
                     <button onclick="showTab('network')" class="nav-btn px-3 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-[15px] whitespace-nowrap" data-tab="network">
                         Network
                     </button>
-                    <button onclick="showTab('networks')" class="nav-btn px-3 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-[15px] whitespace-nowrap" data-tab="networks">
-                        AP Archive
-                    </button>
-                    <button onclick="showTab('network-map')" class="nav-btn px-3 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-[15px] whitespace-nowrap" data-tab="network-map">
-                        Map
-                    </button>
                     <button onclick="showTab('discovered')" class="nav-btn px-3 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-[15px] whitespace-nowrap" data-tab="discovered">
                         Discovered
-                    </button>
-                    <button onclick="showTab('credentials')" class="nav-btn px-3 py-1.5 rounded-lg hover:bg-slate-700 transition-colors text-[15px] whitespace-nowrap" data-tab="credentials">
-                        Credentials
                     </button>
                     <button id="pentest-nav-btn" onclick="showTab('pentest')"
                             class="nav-btn px-3 py-1.5 rounded-lg transition-colors text-[15px] whitespace-nowrap pentest-nav-btn hidden"
@@ -413,10 +404,7 @@
             <div class="px-2 pt-2 pb-3 space-y-1">
                 <button onclick="showTab('dashboard')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Dashboard</button>
                 <button onclick="showTab('network')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Network</button>
-                <button onclick="showTab('networks')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">AP Archive</button>
-                <button onclick="showTab('network-map')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Network Map</button>
                 <button onclick="showTab('discovered')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Discovered</button>
-                <button onclick="showTab('credentials')" class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700">Credentials</button>
                 <button onclick="showTab('pentest')"
                         id="mobile-pentest-nav"
                         class="block w-full text-left px-3 py-2 rounded-lg hover:bg-slate-700 pentest-nav-btn hidden"
@@ -851,6 +839,14 @@
         
         <!-- Network Tab -->
         <div id="network-tab" class="tab-content hidden">
+            <!-- Sub-tab navigation -->
+            <div class="flex flex-wrap items-center gap-1 mb-5 border-b border-slate-800 pb-2">
+                <button id="net-subtab-hosts" onclick="showNetworkSubtab('hosts')" class="net-subtab px-4 py-2 rounded-lg text-sm font-semibold transition-colors bg-Ragnar-600 text-white">Hosts</button>
+                <button id="net-subtab-archive" onclick="showNetworkSubtab('archive')" class="net-subtab px-4 py-2 rounded-lg text-sm font-semibold transition-colors text-slate-400 hover:bg-slate-700 hover:text-white">AP Archive</button>
+                <button id="net-subtab-map" onclick="showNetworkSubtab('map')" class="net-subtab px-4 py-2 rounded-lg text-sm font-semibold transition-colors text-slate-400 hover:bg-slate-700 hover:text-white">Map</button>
+            </div>
+
+            <div id="net-sub-hosts" class="net-subview">
             <!-- Network Status Header -->
             <div class="glass rounded-xl p-6 mb-6">
                 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4">
@@ -995,10 +991,9 @@
                     </table>
                 </div>
             </div>
-        </div>
-        
-        <!-- Networks Tab — All Scanned Networks -->
-        <div id="networks-tab" class="tab-content hidden">
+            </div><!-- /#net-sub-hosts -->
+
+            <div id="net-sub-archive" class="net-subview hidden">
             <div class="glass rounded-xl p-6">
                 <div class="flex items-center justify-between mb-6">
                     <div>
@@ -1038,10 +1033,9 @@
                     <div id="networks-file-list-container"></div>
                 </div>
             </div>
-        </div>
+            </div><!-- /#net-sub-archive -->
 
-        <!-- Network Map Tab -->
-        <div id="network-map-tab" class="tab-content hidden">
+            <div id="net-sub-map" class="net-subview hidden">
             <div class="glass rounded-xl p-6">
                 <!-- Header row: title left, controls right -->
                 <div class="flex items-center justify-between mb-3">
@@ -1106,75 +1100,8 @@
                 </div>
                 <p class="text-xs text-gray-500 mt-2">Click a node to open host details. Scroll to zoom. Drag to pan.</p>
             </div>
-        </div>
-
-        <!-- Credentials Tab -->
-        <div id="credentials-tab" class="tab-content hidden">
-            <div class="glass rounded-xl p-6">
-                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6">
-                    <div>
-                        <h2 class="text-2xl font-bold mb-1">Credentials</h2>
-                        <p class="text-sm text-gray-400">All discovered credentials across all services</p>
-                    </div>
-                    <div class="flex gap-2 mt-4 sm:mt-0">
-                        <button onclick="exportCredentialsCSV()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
-                            Export CSV
-                        </button>
-                        <button onclick="loadCredentials(true)" class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
-                            Refresh
-                        </button>
-                    </div>
-                </div>
-                <!-- Stats row -->
-                <div id="cred-stats" class="grid grid-cols-3 sm:grid-cols-7 gap-3 mb-6"></div>
-
-                <!-- Filters -->
-                <div class="flex flex-col sm:flex-row gap-3 mb-4">
-                    <div class="relative flex-1">
-                        <svg class="w-4 h-4 text-gray-400 pointer-events-none" style="position:absolute;right:0.75rem;top:50%;transform:translateY(-50%);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 1 0 5 11a6 6 0 0 0 12 0z"></path>
-                        </svg>
-                        <input id="cred-ip-search" type="text" placeholder="Filter by IP..." oninput="onCredSearch(this.value)"
-                            class="w-full bg-slate-800 border border-slate-600 rounded-lg py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-Ragnar-500" style="padding-left:0.75rem;padding-right:2.5rem;">
-                    </div>
-                    <div class="flex flex-wrap gap-2">
-                        <button onclick="filterCredsByService('all')" data-svc="all" class="cred-svc-btn bg-Ragnar-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">All</button>
-                        <button onclick="filterCredsByService('ssh')" data-svc="ssh" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">SSH</button>
-                        <button onclick="filterCredsByService('smb')" data-svc="smb" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">SMB</button>
-                        <button onclick="filterCredsByService('ftp')" data-svc="ftp" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">FTP</button>
-                        <button onclick="filterCredsByService('telnet')" data-svc="telnet" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">Telnet</button>
-                        <button onclick="filterCredsByService('rdp')" data-svc="rdp" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">RDP</button>
-                        <button onclick="filterCredsByService('sql')" data-svc="sql" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">SQL</button>
-                    </div>
-                </div>
-
-                <!-- Table -->
-                <div class="overflow-x-auto">
-                    <table class="w-full text-sm" style="min-width:640px;">
-                        <thead>
-                            <tr class="border-b border-slate-700">
-                                <th onclick="sortCredsBy('ip')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none whitespace-nowrap">
-                                    IP <span id="cred-sort-ip" class="text-xs"></span>
-                                </th>
-                                <th onclick="sortCredsBy('service')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none whitespace-nowrap">
-                                    Service <span id="cred-sort-service" class="text-xs"></span>
-                                </th>
-                                <th class="text-left py-3 px-4 text-gray-400 font-medium whitespace-nowrap">Port</th>
-                                <th onclick="sortCredsBy('username')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none whitespace-nowrap">
-                                    Username <span id="cred-sort-username" class="text-xs"></span>
-                                </th>
-                                <th class="text-left py-3 px-4 text-gray-400 font-medium whitespace-nowrap">Password</th>
-                                <th class="text-left py-3 px-4 text-gray-400 font-medium whitespace-nowrap">Copy</th>
-                            </tr>
-                        </thead>
-                        <tbody id="cred-table-body">
-                            <tr><td colspan="6" class="py-8 text-center text-gray-400">Loading credentials...</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-                <div id="cred-table-count" class="text-sm text-gray-400 mt-3"></div>
-            </div>
-        </div>
+            </div><!-- /#net-sub-map -->
+        </div><!-- /#network-tab -->
 
         <!-- Connect Tab -->
         <div id="connect-tab" class="tab-content hidden">
@@ -1870,6 +1797,13 @@
         
         <!-- Discovered Tab -->
         <div id="discovered-tab" class="tab-content hidden">
+            <!-- Sub-tab navigation -->
+            <div class="flex flex-wrap items-center gap-1 mb-5 border-b border-slate-800 pb-2">
+                <button id="disc-subtab-main" onclick="showDiscoveredSubtab('main')" class="disc-subtab px-4 py-2 rounded-lg text-sm font-semibold transition-colors bg-Ragnar-600 text-white">Discovered</button>
+                <button id="disc-subtab-credentials" onclick="showDiscoveredSubtab('credentials')" class="disc-subtab px-4 py-2 rounded-lg text-sm font-semibold transition-colors text-slate-400 hover:bg-slate-700 hover:text-white">Credentials</button>
+            </div>
+
+            <div id="disc-sub-main" class="disc-subview">
             <!-- Top section: Credentials and Loot -->
             <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
                 <div class="glass rounded-xl p-6 h-full flex flex-col">
@@ -2071,13 +2005,81 @@
                     </div>
                 </div>
             </div>
-        </div>
+            </div><!-- /#disc-sub-main -->
+
+            <div id="disc-sub-credentials" class="disc-subview hidden">
+            <div class="glass rounded-xl p-6">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6">
+                    <div>
+                        <h2 class="text-2xl font-bold mb-1">Credentials</h2>
+                        <p class="text-sm text-gray-400">All discovered credentials across all services</p>
+                    </div>
+                    <div class="flex gap-2 mt-4 sm:mt-0">
+                        <button onclick="exportCredentialsCSV()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
+                            Export CSV
+                        </button>
+                        <button onclick="loadCredentials(true)" class="bg-Ragnar-600 hover:bg-Ragnar-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
+                            Refresh
+                        </button>
+                    </div>
+                </div>
+                <!-- Stats row -->
+                <div id="cred-stats" class="grid grid-cols-3 sm:grid-cols-7 gap-3 mb-6"></div>
+
+                <!-- Filters -->
+                <div class="flex flex-col sm:flex-row gap-3 mb-4">
+                    <div class="relative flex-1">
+                        <svg class="w-4 h-4 text-gray-400 pointer-events-none" style="position:absolute;right:0.75rem;top:50%;transform:translateY(-50%);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 1 0 5 11a6 6 0 0 0 12 0z"></path>
+                        </svg>
+                        <input id="cred-ip-search" type="text" placeholder="Filter by IP..." oninput="onCredSearch(this.value)"
+                            class="w-full bg-slate-800 border border-slate-600 rounded-lg py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-Ragnar-500" style="padding-left:0.75rem;padding-right:2.5rem;">
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <button onclick="filterCredsByService('all')" data-svc="all" class="cred-svc-btn bg-Ragnar-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">All</button>
+                        <button onclick="filterCredsByService('ssh')" data-svc="ssh" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">SSH</button>
+                        <button onclick="filterCredsByService('smb')" data-svc="smb" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">SMB</button>
+                        <button onclick="filterCredsByService('ftp')" data-svc="ftp" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">FTP</button>
+                        <button onclick="filterCredsByService('telnet')" data-svc="telnet" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">Telnet</button>
+                        <button onclick="filterCredsByService('rdp')" data-svc="rdp" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">RDP</button>
+                        <button onclick="filterCredsByService('sql')" data-svc="sql" class="cred-svc-btn bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-sm transition-colors">SQL</button>
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm" style="min-width:640px;">
+                        <thead>
+                            <tr class="border-b border-slate-700">
+                                <th onclick="sortCredsBy('ip')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none whitespace-nowrap">
+                                    IP <span id="cred-sort-ip" class="text-xs"></span>
+                                </th>
+                                <th onclick="sortCredsBy('service')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none whitespace-nowrap">
+                                    Service <span id="cred-sort-service" class="text-xs"></span>
+                                </th>
+                                <th class="text-left py-3 px-4 text-gray-400 font-medium whitespace-nowrap">Port</th>
+                                <th onclick="sortCredsBy('username')" class="text-left py-3 px-4 text-gray-400 font-medium cursor-pointer hover:text-white select-none whitespace-nowrap">
+                                    Username <span id="cred-sort-username" class="text-xs"></span>
+                                </th>
+                                <th class="text-left py-3 px-4 text-gray-400 font-medium whitespace-nowrap">Password</th>
+                                <th class="text-left py-3 px-4 text-gray-400 font-medium whitespace-nowrap">Copy</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cred-table-body">
+                            <tr><td colspan="6" class="py-8 text-center text-gray-400">Loading credentials...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div id="cred-table-count" class="text-sm text-gray-400 mt-3"></div>
+            </div>
+            </div><!-- /#disc-sub-credentials -->
+        </div><!-- /#discovered-tab -->
 
         <!-- Threat Intelligence Tab -->
         <div id="threat-intel-tab" class="tab-content hidden">
-            <div class="flex items-center gap-1 mb-5 border-b border-slate-800">
-                <button id="ti-subtab-vulns" onclick="showThreatIntelSubtab('vulns')" class="ti-subtab px-4 py-2 text-sm font-semibold border-b-2 border-Ragnar-500 text-white -mb-px">Vulnerabilities by Host</button>
-                <button id="ti-subtab-compliance" onclick="showThreatIntelSubtab('compliance')" class="ti-subtab px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-white -mb-px">Compliance</button>
+            <div class="flex flex-wrap items-center gap-1 mb-5 border-b border-slate-800 pb-2">
+                <button id="ti-subtab-vulns" onclick="showThreatIntelSubtab('vulns')" class="ti-subtab px-4 py-2 rounded-lg text-sm font-semibold transition-colors bg-Ragnar-600 text-white">Vulnerabilities by Host</button>
+                <button id="ti-subtab-compliance" onclick="showThreatIntelSubtab('compliance')" class="ti-subtab px-4 py-2 rounded-lg text-sm font-semibold transition-colors text-slate-400 hover:bg-slate-700 hover:text-white">Compliance</button>
             </div>
             <div id="ti-sub-vulns">
             <div class="mb-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">

@@ -803,6 +803,11 @@ function initializeTabs() {
 }
 
 function showTab(tabName) {
+    // Backward-compat: these tabs are now sub-tabs of Network / Discovered
+    if (tabName === 'networks') { showTab('network'); showNetworkSubtab('archive'); return; }
+    if (tabName === 'network-map') { showTab('network'); showNetworkSubtab('map'); return; }
+    if (tabName === 'credentials') { showTab('discovered'); showDiscoveredSubtab('credentials'); return; }
+
     currentTab = tabName;
 
     if (systemMonitoringInterval && tabName !== 'system') {
@@ -835,6 +840,43 @@ function showTab(tabName) {
     const mobileMenu = document.getElementById('mobile-menu');
     if (mobileMenu) {
         mobileMenu.classList.add('hidden');
+    }
+}
+
+function _setSubtabActive(btn, active) {
+    if (!btn) return;
+    btn.classList.toggle('bg-Ragnar-600', active);
+    btn.classList.toggle('text-white', active);
+    btn.classList.toggle('text-slate-400', !active);
+    btn.classList.toggle('hover:bg-slate-700', !active);
+    btn.classList.toggle('hover:text-white', !active);
+}
+
+function showNetworkSubtab(name) {
+    const views = { hosts: 'net-sub-hosts', archive: 'net-sub-archive', map: 'net-sub-map' };
+    Object.keys(views).forEach(key => {
+        const el = document.getElementById(views[key]);
+        if (el) el.classList.toggle('hidden', key !== name);
+        _setSubtabActive(document.getElementById('net-subtab-' + key), key === name);
+    });
+    if (name === 'archive') {
+        loadAllNetworksData();
+    } else if (name === 'map') {
+        if (!_mapInitialized) { loadNetworkMap(); }
+    } else if (name === 'hosts') {
+        loadNetworkData();
+    }
+}
+
+function showDiscoveredSubtab(name) {
+    const views = { main: 'disc-sub-main', credentials: 'disc-sub-credentials' };
+    Object.keys(views).forEach(key => {
+        const el = document.getElementById(views[key]);
+        if (el) el.classList.toggle('hidden', key !== name);
+        _setSubtabActive(document.getElementById('disc-subtab-' + key), key === name);
+    });
+    if (name === 'credentials') {
+        loadCredentials();
     }
 }
 
@@ -8983,8 +9025,8 @@ function showThreatIntelSubtab(which) {
     const cBtn = document.getElementById('ti-subtab-compliance');
     if (vulns) vulns.classList.toggle('hidden', which !== 'vulns');
     if (comp) comp.classList.toggle('hidden', which !== 'compliance');
-    const active = 'ti-subtab px-4 py-2 text-sm font-semibold border-b-2 border-Ragnar-500 text-white -mb-px';
-    const idle = 'ti-subtab px-4 py-2 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-white -mb-px';
+    const active = 'ti-subtab px-4 py-2 rounded-lg text-sm font-semibold transition-colors bg-Ragnar-600 text-white';
+    const idle = 'ti-subtab px-4 py-2 rounded-lg text-sm font-semibold transition-colors text-slate-400 hover:bg-slate-700 hover:text-white';
     if (vBtn) vBtn.className = which === 'vulns' ? active : idle;
     if (cBtn) cBtn.className = which === 'compliance' ? active : idle;
     if (which === 'compliance') loadComplianceData();
