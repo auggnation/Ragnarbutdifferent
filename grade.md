@@ -31,7 +31,7 @@ Legend: `✅✅` strong · `✅` yes · `⚠️` partial · `❌` no
 | Vulns-by-host tracking | ✅✅ | ❌ | ✅ | ✅✅ | ⚠️ | ⚠️ | ❌ | ✅ | ⚠️ |
 | Wireless attacks / wardriving | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | RF / NFC / USB-HID | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ⚠️ |
-| Compliance reporting (PCI/CIS) | ❌ | ❌ | ✅ | ✅✅ | ⚠️ | ⚠️ | ❌ | ✅✅ | ❌ |
+| Compliance reporting (PCI/CIS) | ✅ | ❌ | ✅ | ✅✅ | ⚠️ | ⚠️ | ❌ | ✅✅ | ❌ |
 | FP accuracy / QA discipline | ⚠️ | ✅ | ✅ | ✅✅ | ✅ | ✅✅ | ✅ | ✅ | ✅ |
 | Standalone display UX | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Data store / reporting | ✅ | ⚠️ | ✅ | ✅✅ | ✅ | ✅ | ✅ | ✅✅ | ⚠️ |
