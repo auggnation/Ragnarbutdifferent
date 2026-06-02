@@ -4215,6 +4215,34 @@ class AdvancedVulnScanner:
             'description': 'Reflected input detected in response',
         }
 
+    def _response_has_sql_error_signal(self, response_body: str) -> bool:
+        """Check response text for common SQL/database error signatures."""
+        body = (response_body or '').lower()
+        if not body:
+            return False
+
+        sql_error_markers = (
+            'sql syntax',
+            'mysql',
+            'mariadb',
+            'postgresql',
+            'pg_query',
+            'sqlite',
+            'sqlite3',
+            'oracle',
+            'ora-',
+            'odbc',
+            'jdbc',
+            'sqlstate',
+            'unclosed quotation mark',
+            'quoted string not properly terminated',
+            'you have an error in your sql syntax',
+            'native client',
+            'db2 sql error',
+            'syntax error at or near',
+        )
+        return any(marker in body for marker in sql_error_markers)
+
     def _extract_fuzz_endpoints(self, scan_id: str, target: str) -> List[Dict]:
         """Extract parameterized endpoints from ZAP message history."""
         parsed_target = urllib.parse.urlparse(target)
@@ -4397,6 +4425,11 @@ class AdvancedVulnScanner:
             for payload, category in payload_set:
                 ctx = self._analyze_reflection_context(payload, resp_body, content_type)
                 if not ctx:
+                    continue
+
+                # Reflection of SQLi payloads alone is not enough evidence.
+                # Require backend SQL error signatures to avoid noisy false positives.
+                if category == 'sqli' and not self._response_has_sql_error_signal(resp_body):
                     continue
 
                 # Dedup
@@ -4814,6 +4847,67 @@ class AdvancedVulnScanner:
             # Propagate the error so callers know alert fetching failed
             raise RuntimeError(f"Failed to fetch ZAP alerts: {e}") from e
 
+    def _normalize_zap_confidence(self, raw_conf: Any) -> Tuple[int, str]:
+        """Normalize ZAP confidence to a numeric level and display string."""
+        if isinstance(raw_conf, str) and not raw_conf.isdigit():
+            confidence_str = self.ZAP_CONFIDENCE_NAME_MAP.get(raw_conf.lower(), 'Unknown')
+            confidence_num = {
+                'False Positive': 0,
+                'Low': 1,
+                'Medium': 2,
+                'High': 3,
+                'Confirmed': 4,
+            }.get(confidence_str, -1)
+            return confidence_num, confidence_str
+
+        confidence_num = int(raw_conf)
+        confidence_str = self.ZAP_CONFIDENCE_MAP.get(confidence_num, 'Unknown')
+        return confidence_num, confidence_str
+
+    def _is_sql_related_zap_alert(self, alert: Dict) -> bool:
+        """Return True when a ZAP alert appears related to SQL injection."""
+        text = ' '.join([
+            str(alert.get('name', '')),
+            str(alert.get('description', '')),
+            str(alert.get('alert', '')),
+            str(alert.get('other', '')),
+        ]).lower()
+
+        markers = (
+            'sql injection',
+            'sqli',
+            'sql ',
+            'database error',
+            'sql statement',
+        )
+        return any(marker in text for marker in markers)
+
+    def _should_filter_zap_alert(self, alert: Dict, risk_level: int, confidence_num: int) -> bool:
+        """Apply conservative filtering to reduce noisy ZAP findings.
+
+        We only suppress obviously weak alerts, especially SQL-related findings
+        that are common false positives in aggressive fuzzing profiles.
+        """
+        # Respect explicit false-positive confidence from ZAP.
+        if confidence_num == 0:
+            return True
+
+        if not self._is_sql_related_zap_alert(alert):
+            return False
+
+        # For SQL-related alerts, low confidence + low risk is usually noise.
+        if confidence_num <= 1 and risk_level <= 1:
+            return True
+
+        # If SQL alert is low confidence and has no concrete evidence/attack,
+        # treat it as likely fuzz noise.
+        has_attack = bool(str(alert.get('attack', '')).strip())
+        has_evidence = bool(str(alert.get('evidence', '')).strip())
+        if confidence_num <= 1 and not has_attack and not has_evidence:
+            return True
+
+        return False
+
     def _parse_zap_alert(self, alert: Dict, scan_id: str) -> Optional[VulnerabilityFinding]:
         """Parse a ZAP alert into VulnerabilityFinding"""
         try:
@@ -4821,14 +4915,21 @@ class AdvancedVulnScanner:
             raw_risk = alert.get('risk', 0)
             if isinstance(raw_risk, str) and not raw_risk.isdigit():
                 severity = self.ZAP_RISK_NAME_MAP.get(raw_risk.lower(), VulnSeverity.INFO)
+                risk_level = {
+                    'informational': 0,
+                    'low': 1,
+                    'medium': 2,
+                    'high': 3,
+                }.get(raw_risk.lower(), 0)
             else:
-                severity = self.ZAP_RISK_MAP.get(int(raw_risk), VulnSeverity.INFO)
+                risk_level = int(raw_risk)
+                severity = self.ZAP_RISK_MAP.get(risk_level, VulnSeverity.INFO)
 
             raw_conf = alert.get('confidence', 0)
-            if isinstance(raw_conf, str) and not raw_conf.isdigit():
-                confidence_str = self.ZAP_CONFIDENCE_NAME_MAP.get(raw_conf.lower(), 'Unknown')
-            else:
-                confidence_str = self.ZAP_CONFIDENCE_MAP.get(int(raw_conf), 'Unknown')
+            confidence_num, confidence_str = self._normalize_zap_confidence(raw_conf)
+
+            if self._should_filter_zap_alert(alert, risk_level, confidence_num):
+                return None
 
             # Extract CWE ID if present
             cwe_ids = []
