@@ -1453,6 +1453,10 @@ class WardrivingEngine:
                 dev = detect_gps_device(exclude_ports=esp_exclude or None)
             except Exception:
                 dev = None
+            # 'gpsd' is the sentinel for "gpsd already running and owns the port",
+            # not a device path — treat as already-configured, don't re-point.
+            if dev == 'gpsd':
+                dev = None
             want = os.path.realpath(dev) if dev else None
             needs_setup = bool(want) and want != self._gpsd_configured_realpath()
 

@@ -37,6 +37,12 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Stop gpsd before probing so (a) the serial port is free for the NMEA probe and
+# (b) the detector doesn't just return the 'gpsd' sentinel for an already-running
+# daemon — which would otherwise get written back as a bogus DEVICES="gpsd".
+systemctl stop gpsd.socket >/dev/null 2>&1 || true
+systemctl stop gpsd        >/dev/null 2>&1 || true
+
 # Detect the GPS generically using Ragnar's own detector (keyword match on
 # /dev/serial/by-id, then an NMEA probe on any non-Espressif serial). Works for
 # any USB GPS, not just the u-blox 7. Empty if nothing is plugged in right now.
@@ -44,6 +50,8 @@ GPS_DEV=""
 if command -v python3 >/dev/null 2>&1; then
     GPS_DEV="$(cd "$REPO_DIR" && python3 -c "from gps_manager import detect_gps_device; print(detect_gps_device() or '')" 2>/dev/null | tr -d '[:space:]')"
 fi
+# Guard: never pin the gpsd sentinel as a real device.
+[[ "$GPS_DEV" == "gpsd" ]] && GPS_DEV=""
 
 # Prefer a stable /dev/serial/by-id symlink so DEVICES survives a replug.
 resolve_by_id() {
