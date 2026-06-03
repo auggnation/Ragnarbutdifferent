@@ -269,6 +269,18 @@ Auto-detected at startup, in priority order:
 3. **NMEA probe** — other `by-id` entries that aren't already claimed by an ESP companion are probed at 9600/4800/38400/115200 baud for `$GP`/`$GN`/`$GL` sentences.
 4. **Raw device nodes** — `/dev/ttyACM*`, `/dev/ttyUSB*`, `/dev/ttyS*`, `/dev/ttyAMA*`, `/dev/serial0`, `/dev/serial1` — probed the same way.
 
+### gpsd setup
+
+`gpsd` + `gpsd-clients` are installed by the wardriving installer (`install_wifi_management.sh`), which then runs `scripts/setup_gpsd.sh`:
+
+- **Generic detection.** The script pins `DEVICES` to whatever USB GPS the standard detector (`gps_manager.detect_gps_device`) finds — any NMEA puck, not a single VID:PID — preferring a stable `/dev/serial/by-id/*` symlink so the pin survives a replug.
+- **`USBAUTO="false"` (deliberate).** This stops gpsd's udev hotplug from seizing a companion ESP32 (Piglet/Huginn) `/dev/ttyACM*` port. Pinning + USBAUTO-off is what keeps gpsd and the companion serial readers from fighting over the same device.
+- **`GPSD_OPTIONS="-n"`.** gpsd polls the receiver before any client connects, so `satellites_in_view` / `snr_max` update while still searching for a fix.
+- **Runtime ensure.** On `start()`, wardriving best-effort re-runs `setup_gpsd.sh` if gpsd isn't active or a *different* GPS has been swapped in, then `gps_manager` consumes the gpsd socket (`source: gpsd`). If gpsd isn't installed it silently falls back to direct serial.
+- **Verify live.** `cgps` or `gpsmon` show per-satellite SNR in real time — useful for antenna placement / sky-test checks.
+
+Re-run `sudo scripts/setup_gpsd.sh` manually after swapping to a different GPS receiver.
+
 ### NMEA Parser
 
 - **Permissive talker IDs.** The GGA/RMC/GSV regexes accept any two-letter talker prefix (GP, GN, GL, GA, GB, GI, GQ, …) so multi-GNSS modules are covered.
