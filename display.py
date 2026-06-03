@@ -1311,7 +1311,13 @@ class Display:
         if gps.get('has_fix'):
             gps_str = f"{gps.get('latitude', 0):.4f},{gps.get('longitude', 0):.4f}"
         elif gps.get('connected'):
-            gps_str = "Searching..."
+            # Mirror the web UI, which shows how many satellites are visible
+            # before a fix is acquired ("Searching (N visible)").
+            in_view = gps.get('satellites_in_view')
+            if isinstance(in_view, (int, float)) and in_view > 0:
+                gps_str = f"Searching ({int(in_view)} vis)"
+            else:
+                gps_str = "Searching..."
         else:
             gps_str = "No GPS"
 
@@ -1796,8 +1802,13 @@ class Display:
                 gx = 40
             draw.text((gx, 182), gps_str, font=font_ssid, fill=gps_col)
 
-            # Sats info
-            sats_str = f"Sats: {gps.get('satellites', '-')}"
+            # Sats info — used/in-view, matching the web UI so the number of
+            # visible satellites is shown even before a fix is acquired.
+            in_view = gps.get('satellites_in_view')
+            if isinstance(in_view, (int, float)) and in_view > 0:
+                sats_str = f"Sats: {gps.get('satellites', 0)}/{int(in_view)}"
+            else:
+                sats_str = f"Sats: {gps.get('satellites', '-')}"
             try:
                 sb = font_ssid.getbbox(sats_str)
                 sx = (SIZE - (sb[2] - sb[0])) // 2
@@ -2258,7 +2269,11 @@ class Display:
                 if spd is not None:
                     gps_str += f" {spd:.0f}km/h"
             elif gps.get('connected'):
-                gps_str = "GPS searching..."
+                in_view = gps.get('satellites_in_view')
+                if isinstance(in_view, (int, float)) and in_view > 0:
+                    gps_str = f"GPS searching {int(in_view)} vis"
+                else:
+                    gps_str = "GPS searching..."
             else:
                 gps_str = "No GPS"
 
