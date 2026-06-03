@@ -1410,6 +1410,67 @@ class WardrivingEngine:
             alerts.extend(c.esp_alerts)
         return sorted(alerts, key=lambda a: a.get('time', 0))
 
+    def _gpsd_configured_realpath(self):
+        """realpath of the device gpsd is currently pinned to, or None.
+
+        Reads the first entry of DEVICES= in /etc/default/gpsd so we can tell
+        whether a re-detected GPS differs from what gpsd already owns.
+        """
+        try:
+            with open('/etc/default/gpsd') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('DEVICES='):
+                        val = line.split('=', 1)[1].strip().strip('"').strip("'")
+                        first = val.split()[0] if val else ''
+                        return os.path.realpath(first) if first else None
+        except Exception:
+            return None
+        return None
+
+    def _ensure_gpsd(self, esp_exclude=None):
+        """Best-effort: make sure gpsd is running and pinned to the current GPS.
+
+        Only acts when the gpsd binary is installed (added by the wardriving
+        installer). Supports any USB GPS: it re-detects the receiver so a swapped
+        puck is picked up, and re-runs scripts/setup_gpsd.sh (single source of
+        truth for the config, USBAUTO stays false) when the pinned device changed
+        or gpsd isn't active. Never raises — on any failure the caller falls
+        through to the existing direct-serial GPS path; gpsd stays optional.
+        """
+        import shutil
+        import subprocess
+        try:
+            if not shutil.which('gpsd'):
+                return  # not installed — direct-serial path handles GPS
+
+            active = subprocess.run(
+                ['systemctl', 'is-active', '--quiet', 'gpsd.socket'],
+                timeout=5).returncode == 0
+
+            try:
+                from gps_manager import detect_gps_device
+                dev = detect_gps_device(exclude_ports=esp_exclude or None)
+            except Exception:
+                dev = None
+            want = os.path.realpath(dev) if dev else None
+            needs_setup = bool(want) and want != self._gpsd_configured_realpath()
+
+            if needs_setup or not active:
+                setup = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     'scripts', 'setup_gpsd.sh')
+                if os.path.isfile(setup):
+                    subprocess.run(['sudo', 'bash', setup], timeout=30, check=False,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logger.info("gpsd ensured via setup_gpsd.sh")
+                elif not active:
+                    subprocess.run(['sudo', 'systemctl', 'start', 'gpsd.socket', 'gpsd'],
+                                   timeout=10, check=False,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    logger.info("gpsd started")
+        except Exception as e:
+            logger.debug(f"_ensure_gpsd best-effort failed: {e}")
+
     def start(self, interfaces=None, gps_port=None, device_name=None):
         """Start a wardriving session."""
         if self._running:
@@ -1445,6 +1506,11 @@ class WardrivingEngine:
         import glob as _glob
         _raw_candidates = sorted(_glob.glob('/dev/ttyACM*') + _glob.glob('/dev/ttyUSB*'))
         esp_exclude = {p for p in _raw_candidates if self._port_is_espressif(p)}
+
+        # If gpsd is installed, make sure it's running and pinned to the current
+        # USB GPS (any puck, hot-swap aware). gps_manager auto-detection then
+        # prefers the gpsd socket. Best-effort — falls back to direct serial.
+        self._ensure_gpsd(esp_exclude)
 
         # Start GPS (exclude known ESP32 ports from probing)
         from gps_manager import GPSManager

@@ -73,12 +73,14 @@ install_system_packages() {
     # Install required packages
     local packages=(
         "hostapd"
-        "dnsmasq" 
+        "dnsmasq"
         "network-manager"
         "wireless-tools"
         "wpasupplicant"
         "python3-pip"
         "git"
+        "gpsd"
+        "gpsd-clients"
     )
     
     for package in "${packages[@]}"; do
@@ -91,6 +93,25 @@ install_system_packages() {
     done
     
     print_success "System packages installed"
+}
+
+setup_gps_daemon() {
+    # Configure gpsd for wardriving GPS. gps_manager prefers the gpsd socket on
+    # localhost:2947; setup_gpsd.sh pins it to the detected USB GPS with
+    # USBAUTO=false so it never grabs a companion ESP32 port. Best-effort.
+    print_status "Configuring gpsd for wardriving GPS..."
+    local here gpsd_setup=""
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "$here/setup_gpsd.sh" ]]; then
+        gpsd_setup="$here/setup_gpsd.sh"
+    elif [[ -f "$here/scripts/setup_gpsd.sh" ]]; then
+        gpsd_setup="$here/scripts/setup_gpsd.sh"
+    fi
+    if [[ -n "$gpsd_setup" ]]; then
+        bash "$gpsd_setup" || print_warning "gpsd setup skipped/failed (non-fatal)"
+    else
+        print_warning "setup_gpsd.sh not found; skipping gpsd configuration"
+    fi
 }
 
 setup_permissions() {
@@ -282,6 +303,7 @@ main() {
     install_system_packages
     setup_permissions
     install_python_requirements
+    setup_gps_daemon
     create_systemd_service
     configure_network
     setup_web_interface

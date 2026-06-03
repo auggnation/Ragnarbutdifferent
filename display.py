@@ -1312,10 +1312,15 @@ class Display:
             gps_str = f"{gps.get('latitude', 0):.4f},{gps.get('longitude', 0):.4f}"
         elif gps.get('connected'):
             # Mirror the web UI, which shows how many satellites are visible
-            # before a fix is acquired ("Searching (N visible)").
+            # before a fix is acquired. Peak SNR is added so antenna placement
+            # can be judged live (kept compact to fit the 22-char value width).
             in_view = gps.get('satellites_in_view')
+            snr = gps.get('snr_max')
             if isinstance(in_view, (int, float)) and in_view > 0:
-                gps_str = f"Searching ({int(in_view)} vis)"
+                if isinstance(snr, (int, float)) and snr > 0:
+                    gps_str = f"Searching {int(in_view)}v/{int(snr)}dB"
+                else:
+                    gps_str = f"Searching ({int(in_view)} vis)"
             else:
                 gps_str = "Searching..."
         else:
@@ -1802,13 +1807,17 @@ class Display:
                 gx = 40
             draw.text((gx, 182), gps_str, font=font_ssid, fill=gps_col)
 
-            # Sats info — used/in-view, matching the web UI so the number of
-            # visible satellites is shown even before a fix is acquired.
+            # Sats info — used/in-view (+ peak SNR), matching the web UI so the
+            # number of visible satellites and signal strength are shown even
+            # before a fix is acquired.
             in_view = gps.get('satellites_in_view')
+            snr = gps.get('snr_max')
             if isinstance(in_view, (int, float)) and in_view > 0:
                 sats_str = f"Sats: {gps.get('satellites', 0)}/{int(in_view)}"
             else:
                 sats_str = f"Sats: {gps.get('satellites', '-')}"
+            if isinstance(snr, (int, float)) and snr > 0:
+                sats_str += f" SNR{int(snr)}"
             try:
                 sb = font_ssid.getbbox(sats_str)
                 sx = (SIZE - (sb[2] - sb[0])) // 2
@@ -2270,8 +2279,12 @@ class Display:
                     gps_str += f" {spd:.0f}km/h"
             elif gps.get('connected'):
                 in_view = gps.get('satellites_in_view')
+                snr = gps.get('snr_max')
                 if isinstance(in_view, (int, float)) and in_view > 0:
-                    gps_str = f"GPS searching {int(in_view)} vis"
+                    if isinstance(snr, (int, float)) and snr > 0:
+                        gps_str = f"GPS srch {int(in_view)}v/{int(snr)}dB"
+                    else:
+                        gps_str = f"GPS searching {int(in_view)} vis"
                 else:
                     gps_str = "GPS searching..."
             else:
