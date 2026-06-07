@@ -102,6 +102,19 @@ def check_authentication():
     if any(path.startswith(p) for p in static_prefixes):
         return
 
+    # Wardriving phone-access AP (KEY1): let AP clients view the minimal live
+    # page and its READ-ONLY data without login — same spirit as the captive
+    # portal. Scoped to GET on the status/track/networks endpoints so a phone
+    # on the AP can watch but cannot stop wardriving, wipe data, etc.
+    if getattr(shared_data, 'wardrive_ap_active', False) and is_ap_client_request():
+        readonly_api = (
+            '/api/wardriving/status', '/api/wardriving/track',
+            '/api/wardriving/networks', '/api/wardriving/gps',
+            '/api/wardriving/bluetooth', '/api/wardriving/cells',
+        )
+        if path in ('/', '/wardrive') or (request.method == 'GET' and path in readonly_api):
+            return
+
     # Kiosk loopback bypass: any request originating from the Pi itself
     # (the on-screen kiosk runs chromium pointed at localhost) bypasses auth.
     # Anyone with local access already has shell on the device, so this

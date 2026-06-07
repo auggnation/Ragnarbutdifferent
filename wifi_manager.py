@@ -119,10 +119,10 @@ class WiFiManager:
         self.ap_interface = self.default_wifi_interface
         self.ap_ip = "192.168.4.1"
         self.ap_subnet = "192.168.4.0/24"
-        # Wardriving AP (KEY1 on the e-paper) — brought up on a spare adapter
-        # so wardriving keeps running. Track prior state for clean teardown.
+        # Wardriving AP (KEY1 on the e-paper) — brought up on a spare/borrowed
+        # adapter so wardriving keeps running. Track prior state for teardown.
         self._wardrive_ap_prev_interface = None
-        self._wardrive_ap_paused = False
+        self._wardrive_ap_lent_iface = None
         
         # Control flags
         self.should_exit = False
@@ -724,6 +724,12 @@ class WiFiManager:
 
     def _endless_loop_wifi_search(self):
         """Search for and connect to known WiFi networks - simply enable WiFi and let system auto-reconnect"""
+        # Don't fight the wardriving phone-access AP (KEY1): it deliberately
+        # borrowed this radio, and reconnecting WiFi would set the interface
+        # back to managed and collapse the AP. Resumes once the user stops it.
+        if getattr(self.shared_data, 'wardrive_ap_active', False):
+            self.logger.info("Endless Loop: WiFi search suppressed — wardriving phone-access AP is up")
+            return False
         self.logger.info("Endless Loop: Starting WiFi search phase (1 minute)")
         search_start_time = time.time()
 
@@ -885,7 +891,7 @@ class WiFiManager:
                     if hasattr(self, '_disconnect_timestamp'):
                         delattr(self, '_disconnect_timestamp')
                     
-                    if self.ap_mode_active:
+                    if self.ap_mode_active and not getattr(self.shared_data, 'wardrive_ap_active', False):
                         self.logger.info("Endless Loop: Stopping AP mode due to successful WiFi connection")
                         self.stop_ap_mode()
                 
@@ -1018,7 +1024,12 @@ class WiFiManager:
         """Handle AP mode monitoring for endless loop with improved recovery"""
         if not self.ap_mode_active or not self.ap_mode_start_time:
             return
-        
+        # The wardriving phone-access AP (KEY1) is user-controlled and must not
+        # be torn down by the endless loop's timeout / known-network recovery —
+        # it stays up until the user presses KEY1 again.
+        if getattr(self.shared_data, 'wardrive_ap_active', False):
+            return
+
         ap_uptime = current_time - self.ap_mode_start_time
         
         # Check for client connections
@@ -2403,57 +2414,65 @@ class WiFiManager:
         return None
 
     def start_wardrive_ap(self):
-        """Bring up AP mode on a spare adapter so a phone can watch the live
-        wardriving page, WITHOUT stopping wardriving. Falls back to pausing
-        wardriving on the default interface if no spare adapter is free.
+        """KEY1 toggle: bring up the phone-access AP that serves the minimal
+        wardriving page, WITHOUT stopping wardriving.
 
-        Acts as a toggle: a second call while the wardrive AP is up tears it
-        down again. Safe to call from a button-handler thread.
+        The AP runs on a spare adapter when one exists; otherwise it BORROWS a
+        radio from wardriving's scan set (removing it so the scan loop's
+        _prepare_interface won't force it back to managed and collapse the AP).
+        Wardriving keeps running on its remaining adapters (or simply pauses
+        scanning if that was the only radio — the engine, GPS, BT and
+        companions stay alive). A second call tears the AP down and hands the
+        radio back to wardriving. Safe to call from a button-handler thread.
         """
         if getattr(self.shared_data, 'wardrive_ap_active', False) or self.ap_mode_active:
             return self.stop_wardrive_ap()
 
-        spare = self._find_wardrive_ap_interface()
-        self._wardrive_ap_paused = False
-        if spare is None:
-            engine = self._wardriving_engine()
-            if engine is not None:
-                self.logger.warning("Wardrive AP: no spare WiFi adapter, pausing wardriving")
-                try:
-                    engine.stop()
-                    self._wardrive_ap_paused = True
-                except Exception as e:
-                    self.logger.error(f"Wardrive AP: failed to pause wardriving: {e}")
-            spare = self.default_wifi_interface
+        engine = self._wardriving_engine()
+        self._wardrive_ap_lent_iface = None
 
-        # If the only free radio is the live WiFi uplink, drop it cleanly first —
-        # a single chip can't be both a station and an AP.
-        if getattr(self, 'wifi_connected', False) and spare == self.default_wifi_interface:
-            self.logger.info(f"Wardrive AP: reclaiming {spare} from the WiFi uplink (WiFi will drop)")
+        # 1) Prefer a genuine spare (multi-adapter rigs).
+        iface = self._find_wardrive_ap_interface()
+        # 2) Otherwise borrow one from wardriving's scan set.
+        if iface is None and engine is not None:
+            iface = engine.lend_interface_for_ap()
+            self._wardrive_ap_lent_iface = iface
+        # 3) Last resort.
+        if iface is None:
+            iface = self.default_wifi_interface
+
+        # If we're taking the live WiFi uplink, drop it cleanly first — a single
+        # chip can't be both a station and an AP.
+        if getattr(self, 'wifi_connected', False) and iface == self.default_wifi_interface:
+            self.logger.info(f"Wardrive AP: reclaiming {iface} from the WiFi uplink (WiFi will drop)")
             try:
                 self.disconnect_wifi()
             except Exception as e:
                 self.logger.warning(f"Wardrive AP: disconnect_wifi failed: {e}")
 
         self._wardrive_ap_prev_interface = self.ap_interface
-        self.ap_interface = spare
-        self.logger.info(f"Wardrive AP: starting on {spare} (SSID={self.ap_ssid})")
+        self.ap_interface = iface
+        self.logger.info(f"Wardrive AP: starting on {iface} (SSID={self.ap_ssid})")
         if self.start_ap_mode():
             self.shared_data.wardrive_ap_active = True
+            self.shared_data.wardrive_ap_url = f"{self.ap_ip}:8000"
+            self.shared_data.wardrive_ap_iface = iface
             self.logger.info(
                 f"Wardrive AP up: join '{self.ap_ssid}' then open http://{self.ap_ip}:8000/")
             return True
 
-        # Start failed — restore prior interface and resume wardriving if paused.
+        # Start failed — restore prior interface and hand the radio back.
         self.ap_interface = self._wardrive_ap_prev_interface or self.default_wifi_interface
-        if self._wardrive_ap_paused:
-            self._resume_wardriving_after_ap()
-            self._wardrive_ap_paused = False
+        if self._wardrive_ap_lent_iface and engine is not None:
+            engine.reclaim_interface_from_ap(self._wardrive_ap_lent_iface)
+        self._wardrive_ap_lent_iface = None
         self.logger.error("Wardrive AP: failed to start AP mode")
         return False
 
     def stop_wardrive_ap(self):
-        """Tear down the wardriving AP and restore the prior interface/state."""
+        """Tear down the wardriving AP and hand the radio back to wardriving,
+        which automatically claims it for scanning again."""
+        iface = getattr(self.shared_data, 'wardrive_ap_iface', '') or self.ap_interface
         try:
             self.stop_ap_mode()
         finally:
@@ -2461,25 +2480,14 @@ class WiFiManager:
                 self.ap_interface = self._wardrive_ap_prev_interface
                 self._wardrive_ap_prev_interface = None
             self.shared_data.wardrive_ap_active = False
-            if self._wardrive_ap_paused:
-                self._resume_wardriving_after_ap()
-                self._wardrive_ap_paused = False
+            self.shared_data.wardrive_ap_url = ''
+            self.shared_data.wardrive_ap_iface = ''
+            engine = self._wardriving_engine()
+            if engine is not None and iface:
+                engine.reclaim_interface_from_ap(iface)
+            self._wardrive_ap_lent_iface = None
         self.logger.info("Wardrive AP stopped")
         return True
-
-    def _resume_wardriving_after_ap(self):
-        """Restart wardriving that was paused to free the AP interface."""
-        try:
-            ragnar = getattr(self.shared_data, 'ragnar_instance', None)
-            engine = getattr(ragnar, '_wd_engine', None) if ragnar else None
-            if engine is None:
-                return
-            device_name = self.shared_data.config.get('wardriving_device_name', 'Ragnar')
-            gps_port = self.shared_data.config.get('wardriving_gps_port', '') or None
-            engine.start(device_name=device_name, gps_port=gps_port)
-            self.logger.info("Wardriving resumed after AP teardown")
-        except Exception as e:
-            self.logger.error(f"Failed to resume wardriving after AP: {e}")
 
     def _create_hostapd_config(self):
         """Create hostapd configuration file"""

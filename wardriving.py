@@ -1314,6 +1314,7 @@ class WardrivingEngine:
         self.session = None
         self.scan_interval = 2  # seconds between scans (fast!)
         self.interfaces = []     # WiFi interfaces to use
+        self._iface_swap_lock = threading.Lock()  # guards lend/reclaim of a scan iface
         self._iface_zero_scans = {}  # consecutive zero-network scans per interface
         self._iface_prepared = set()  # interfaces successfully brought up at least once
         self._iface_last_error = {}  # most informative scan-failure reason per interface
@@ -1594,6 +1595,46 @@ class WardrivingEngine:
                 logger.warning("Wardriving: could not reclaim e-paper HAT buttons")
         except Exception as e:
             logger.debug(f"HAT button reclaim skipped: {e}")
+
+    def lend_interface_for_ap(self, prefer=None):
+        """Remove one scanning interface so the KEY1 AP can own it.
+
+        hostapd needs the radio in AP mode; if the interface stayed in the scan
+        set, _prepare_interface would force it back to managed and collapse the
+        AP. Removing it from self.interfaces stops the scan loop from touching
+        it. Returns the lent interface name, or None if nothing is available.
+        The scan loop re-reads self.interfaces each cycle, so swapping the list
+        reference is picked up safely on the next scan.
+        """
+        with self._iface_swap_lock:
+            ifaces = list(self.interfaces)
+            if not ifaces:
+                return None
+            iface = prefer if (prefer in ifaces) else ifaces[-1]
+            ifaces.remove(iface)
+            self.interfaces = ifaces
+            self._iface_prepared.discard(iface)
+            logger.info(f"Wardriving: lent {iface} to AP; now scanning {self.interfaces or ['(none)']}")
+            return iface
+
+    def reclaim_interface_from_ap(self, iface):
+        """Return an interface to the scan set after the AP releases it.
+
+        Works for a previously-lent adapter or a spare the AP used — wardriving
+        claims it for scanning either way. Re-prepares the radio (managed/up)
+        before adding it back.
+        """
+        if not iface:
+            return
+        with self._iface_swap_lock:
+            if iface in self.interfaces:
+                return
+            try:
+                self._prepare_interface(iface)
+            except Exception as e:
+                logger.warning(f"Wardriving: prepare {iface} on reclaim failed: {e}")
+            self.interfaces = self.interfaces + [iface]
+            logger.info(f"Wardriving: reclaimed {iface}; now scanning {self.interfaces}")
 
     def _trigger_wifi_reconnect_on_disconnect(self, source: str, port: str):
         """Attempt WiFi reconnect after a companion or USB antenna disconnects.
