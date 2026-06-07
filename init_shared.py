@@ -27,3 +27,9 @@ shared_data = SharedData()
 # These are assigned at runtime in Ragnar.py and other modules
 shared_data.ragnar_instance = None
 shared_data.display_instance = None
+
+# Wardriving phone-access AP (KEY1 on the e-paper). Set by WiFiManager;
+# read by the web '/' route (to serve the minimal page) and the e-paper.
+shared_data.wardrive_ap_active = False
+shared_data.wardrive_ap_url = ''
+shared_data.wardrive_ap_iface = ''

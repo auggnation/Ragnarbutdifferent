@@ -1314,6 +1314,12 @@ class WardrivingEngine:
         self.session = None
         self.scan_interval = 2  # seconds between scans (fast!)
         self.interfaces = []     # WiFi interfaces to use
+        self._iface_swap_lock = threading.Lock()  # guards lend/reclaim of a scan iface
+        # USB-serial hot-plug monitor: stable_id -> {'role','node'} for every
+        # managed GPS/companion device. Driven by _device_monitor_loop so a puck
+        # or companion plugged/swapped after start is picked up within seconds.
+        self._managed_devices = {}
+        self._device_monitor_thread = None
         self._iface_zero_scans = {}  # consecutive zero-network scans per interface
         self._iface_prepared = set()  # interfaces successfully brought up at least once
         self._iface_last_error = {}  # most informative scan-failure reason per interface
@@ -1555,17 +1561,21 @@ class WardrivingEngine:
         self._cell_thread = threading.Thread(target=self._cell_scan_loop, daemon=True, name="wardriving-cell")
         self._cell_thread.start()
 
-        # Start serial ESP32 listeners — one thread per detected companion.
-        # Guards against two real failure modes seen in practice:
-        #   1. Same port as GPS: opening /dev/ttyACM0 twice makes both threads read
-        #      half the bytes each. GPS reports 0 satellites; serial listener parses
-        #      NMEA as garbage and mis-classifies the device as Piglet.
-        #   2. Stale saved port: shared_data.config holds a port from a previous
-        #      session, but the ESP32 has been unplugged. Re-verify via udevadm.
-        all_detected = self._detect_all_esp32_serial()
-        for port in all_detected:
-            self._start_companion_thread(port)
-            logger.info(f"Companion auto-detected on {port}")
+        # Continuous USB-serial device monitor — discovers and classifies GPS
+        # pucks and ESP32 companions (Huginn/Piglet/Core/Coordinator) on the fly
+        # and attaches/detaches handlers on hot-plug. Replaces the old one-shot
+        # detection so a device that appears late (the u-blox 7 enumerates ~3.5
+        # min after boot and re-enumerates), or a Huginn→Piglet swap, is picked
+        # up within seconds with no restart. Its first tick handles whatever is
+        # already plugged in.
+        self._managed_devices = {}
+        self._device_monitor_thread = threading.Thread(
+            target=self._device_monitor_loop, daemon=True, name="wardriving-usb-monitor")
+        self._device_monitor_thread.start()
+
+        # Make sure the e-paper HAT keys are ours — a standalone button app
+        # (e.g. airprint.service) may have grabbed the GPIO pins at boot.
+        self._ensure_hat_buttons()
 
         logger.info(f"Wardriving started: interfaces={self.interfaces}, GPS={gps_ok}, device={self.device_name}")
         return {
@@ -1575,6 +1585,61 @@ class WardrivingEngine:
             'gps_available': gps_ok,
             'gps_port': self._gps.port if gps_ok else None
         }
+
+    def _ensure_hat_buttons(self):
+        """Reclaim the 2.7" e-paper HAT buttons for Ragnar when wardriving
+        starts, in case another app (airprint.service) holds the GPIO pins."""
+        try:
+            display = getattr(self.shared_data, 'display_instance', None)
+            listener = getattr(display, 'button_listener', None) if display else None
+            if listener is None or not hasattr(listener, 'ensure_available'):
+                return
+            if listener.ensure_available():
+                logger.info("Wardriving: e-paper HAT buttons ready")
+            else:
+                logger.warning("Wardriving: could not reclaim e-paper HAT buttons")
+        except Exception as e:
+            logger.debug(f"HAT button reclaim skipped: {e}")
+
+    def lend_interface_for_ap(self, prefer=None):
+        """Remove one scanning interface so the KEY1 AP can own it.
+
+        hostapd needs the radio in AP mode; if the interface stayed in the scan
+        set, _prepare_interface would force it back to managed and collapse the
+        AP. Removing it from self.interfaces stops the scan loop from touching
+        it. Returns the lent interface name, or None if nothing is available.
+        The scan loop re-reads self.interfaces each cycle, so swapping the list
+        reference is picked up safely on the next scan.
+        """
+        with self._iface_swap_lock:
+            ifaces = list(self.interfaces)
+            if not ifaces:
+                return None
+            iface = prefer if (prefer in ifaces) else ifaces[-1]
+            ifaces.remove(iface)
+            self.interfaces = ifaces
+            self._iface_prepared.discard(iface)
+            logger.info(f"Wardriving: lent {iface} to AP; now scanning {self.interfaces or ['(none)']}")
+            return iface
+
+    def reclaim_interface_from_ap(self, iface):
+        """Return an interface to the scan set after the AP releases it.
+
+        Works for a previously-lent adapter or a spare the AP used — wardriving
+        claims it for scanning either way. Re-prepares the radio (managed/up)
+        before adding it back.
+        """
+        if not iface:
+            return
+        with self._iface_swap_lock:
+            if iface in self.interfaces:
+                return
+            try:
+                self._prepare_interface(iface)
+            except Exception as e:
+                logger.warning(f"Wardriving: prepare {iface} on reclaim failed: {e}")
+            self.interfaces = self.interfaces + [iface]
+            logger.info(f"Wardriving: reclaimed {iface}; now scanning {self.interfaces}")
 
     def _trigger_wifi_reconnect_on_disconnect(self, source: str, port: str):
         """Attempt WiFi reconnect after a companion or USB antenna disconnects.
@@ -1855,6 +1920,159 @@ class WardrivingEngine:
             return 'Espressif' in result.stdout or 'espressif' in result.stdout.lower()
         except Exception:
             return False
+
+    # ------------------------------------------------------------------
+    # Continuous USB-serial device monitor (GPS + companions, hot-plug)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _enumerate_serial_devices():
+        """Return {stable_id: node} for every present USB-serial device.
+
+        stable_id is the /dev/serial/by-id basename when available (it encodes
+        vendor + serial, so it survives ttyACM* renumbering on hubs/replug);
+        otherwise the real device node path. This lets the monitor tell a
+        re-enumeration (same id, new node) from a genuine add/remove.
+        """
+        import glob as _glob
+        devices = {}
+        seen_nodes = set()
+        by_id = '/dev/serial/by-id'
+        try:
+            if os.path.isdir(by_id):
+                for entry in os.listdir(by_id):
+                    node = os.path.realpath(os.path.join(by_id, entry))
+                    if os.path.exists(node):
+                        devices[entry] = node
+                        seen_nodes.add(node)
+        except Exception:
+            pass
+        try:
+            for node in _glob.glob('/dev/ttyACM*') + _glob.glob('/dev/ttyUSB*'):
+                real = os.path.realpath(node)
+                if real not in seen_nodes:
+                    devices[real] = real
+                    seen_nodes.add(real)
+        except Exception:
+            pass
+        return devices
+
+    @staticmethod
+    def _usb_props(node):
+        """Return (vid, pid, descriptive_string) from udev for a serial node.
+        Uses `-q property` (ID_VENDOR_ID/ID_MODEL_ID/ID_SERIAL/…) — reliable and
+        does NOT open the port (so it never resets an ESP)."""
+        try:
+            r = subprocess.run(
+                ['udevadm', 'info', '-q', 'property', '--name', node],
+                capture_output=True, text=True, timeout=3
+            )
+            props = {}
+            for line in r.stdout.splitlines():
+                if '=' in line:
+                    k, v = line.split('=', 1)
+                    props[k] = v
+            vid = (props.get('ID_VENDOR_ID') or '').lower()
+            pid = (props.get('ID_MODEL_ID') or '').lower()
+            desc = ' '.join(filter(None, (
+                props.get('ID_SERIAL'), props.get('ID_VENDOR'),
+                props.get('ID_MODEL'), props.get('ID_MODEL_FROM_DATABASE'),
+                props.get('ID_VENDOR_FROM_DATABASE'),
+            ))).lower()
+            return vid, pid, desc
+        except Exception:
+            return '', '', ''
+
+    def _classify_serial_port(self, node):
+        """Classify a newly-seen serial port: 'gps' | 'companion' | 'unknown'.
+
+        udev-attribute first (no port open). Only truly ambiguous generic
+        bridges (CP210x/CH340/FTDI) get a short, bounded NMEA probe — and a
+        device with no GPS/ESP/bridge markers is left alone so Ragnar never
+        hijacks an unrelated USB-serial gadget.
+        """
+        vid, _pid, desc = self._usb_props(node)
+        # GPS markers (u-blox VID 1546, or a GPS/GNSS product string).
+        if vid == '1546' or any(k in desc for k in ('u-blox', 'ublox', 'gnss', 'gps', 'nmea')):
+            return 'gps'
+        # Espressif / companion markers.
+        if vid == '303a' or 'espressif' in desc or 'usb jtag' in desc:
+            return 'companion'
+        # Ambiguous USB-UART bridge (common on ESP/GPS dev boards): probe NMEA.
+        if vid in ('10c4', '1a86', '0403', '067b') or not vid:
+            try:
+                from gps_manager import _probe_nmea
+                if _probe_nmea(node, timeout_per_baud=1.0):
+                    return 'gps'
+            except Exception:
+                pass
+            # A bridge that isn't a GPS is almost always an ESP companion board.
+            return 'companion'
+        return 'unknown'
+
+    def _attach_device(self, role, node):
+        """Attach the right handler for a newly-classified device."""
+        if role == 'gps':
+            if self._gps is None:
+                return False
+            if self._gps.attach(node):
+                logger.info(f"[usb-monitor] GPS attached on {node}")
+                return True
+            logger.warning(f"[usb-monitor] GPS attach failed on {node}")
+            return False
+        if role == 'companion':
+            if self._start_companion_thread(node) is not None:
+                logger.info(f"[usb-monitor] companion attached on {node}")
+                return True
+            return False
+        return False
+
+    def _detach_device(self, entry):
+        """Tear down the handler for a device that was unplugged."""
+        role, node = entry.get('role'), entry.get('node')
+        if role == 'gps' and self._gps is not None:
+            logger.info(f"[usb-monitor] GPS unplugged ({node}) — detaching")
+            self._gps.detach()
+        elif role == 'companion':
+            logger.info(f"[usb-monitor] companion unplugged ({node}) — stopping listener")
+            self.stop_serial(node)
+
+    def _device_monitor_loop(self):
+        """Poll the USB-serial device set ~every 1.5 s; attach/detach GPS and
+        companion handlers as devices appear, disappear, or re-enumerate."""
+        logger.info("[usb-monitor] started")
+        while self._running:
+            try:
+                present = self._enumerate_serial_devices()
+                managed = self._managed_devices
+
+                # Removals: a managed device id is no longer present.
+                for dev_id in list(managed.keys()):
+                    if dev_id not in present:
+                        self._detach_device(managed.pop(dev_id))
+
+                # Additions / re-enumerations.
+                for dev_id, node in present.items():
+                    cur = managed.get(dev_id)
+                    if cur is None:
+                        role = self._classify_serial_port(node)
+                        if role == 'unknown':
+                            # Record so we don't re-probe an unrelated gadget every tick.
+                            managed[dev_id] = {'role': 'unknown', 'node': node}
+                        elif self._attach_device(role, node):
+                            managed[dev_id] = {'role': role, 'node': node}
+                    elif cur['node'] != node:
+                        # Same device, new tty node (re-enumeration) → re-point.
+                        self._detach_device(cur)
+                        role = cur['role'] if cur['role'] != 'unknown' else self._classify_serial_port(node)
+                        if role != 'unknown' and self._attach_device(role, node):
+                            managed[dev_id] = {'role': role, 'node': node}
+                        else:
+                            managed[dev_id] = {'role': 'unknown', 'node': node}
+            except Exception as e:
+                logger.debug(f"[usb-monitor] tick error: {e}")
+            time.sleep(1.5)
+        logger.info("[usb-monitor] stopped")
 
     def _get_interface_info(self, iface):
         """Get detailed info about a WiFi interface (bands, manufacturer, USB/built-in)."""
@@ -3314,6 +3532,33 @@ class WardrivingEngine:
         except Exception:
             pass
 
+    @staticmethod
+    def _resolve_coords(raw_lat, raw_lon, raw_alt, gps_lat, gps_lon, gps_alt):
+        """Resolve the coordinates to store for a companion record.
+
+        Companions (notably Huginn, which often runs without its own GPS) may
+        emit records with no lat/lon, a JSON null, or the 0/0 "no fix"
+        sentinel. When the companion's position is missing or invalid and
+        Ragnar has its own fix, we stamp Ragnar's GPS onto the record so the
+        data still lands on the map.
+
+        Returns ``(lat, lon, alt, from_companion)`` where ``from_companion`` is
+        True only when the companion supplied a real position — letting the
+        caller decide whether to forward it to the GPS manager as an external
+        fix (we must not feed Ragnar's own GPS back as a companion fix).
+        """
+        def _f(v):
+            try:
+                return float(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+        lat, lon, alt = _f(raw_lat), _f(raw_lon), _f(raw_alt)
+        if lat is None or lon is None or (lat == 0.0 and lon == 0.0):
+            return gps_lat, gps_lon, gps_alt, False
+        if alt is None:
+            alt = gps_alt
+        return lat, lon, alt, True
+
     def _parse_serial_line(self, line: str, companion: '_CompanionState'):
         """Parse a single line from one ESP32 serial companion."""
         if not self.session:
@@ -3551,17 +3796,16 @@ class WardrivingEngine:
                 rssi = int(data.get('rssi', data.get('signal', -80)))
                 channel = int(data.get('channel', 0))
                 auth = data.get('auth', data.get('security', data.get('encryption', '')))
-                lat = data.get('lat', data.get('latitude', gps_lat))
-                lon = data.get('lon', data.get('longitude', gps_lon))
-                alt = data.get('alt', data.get('altitude', gps_alt))
                 record_type = data.get('type', 'WIFI').upper()
 
-                if lat:
-                    lat = float(lat)
-                if lon:
-                    lon = float(lon)
-                if alt:
-                    alt = float(alt)
+                # Huginn frequently has no GPS of its own — stamp Ragnar's fix
+                # when the record lacks a valid position.
+                lat, lon, alt, from_companion = self._resolve_coords(
+                    data.get('lat', data.get('latitude')),
+                    data.get('lon', data.get('longitude')),
+                    data.get('alt', data.get('altitude')),
+                    gps_lat, gps_lon, gps_alt,
+                )
 
                 if record_type in ('BT', 'BLE', 'BLUETOOTH'):
                     companion.current_esp_mode = 'ble-all'
@@ -3580,7 +3824,7 @@ class WardrivingEngine:
                     )
                     if is_new:
                         companion.networks += 1
-                if lat is not None and lon is not None and self._gps is not None:
+                if from_companion and self._gps is not None:
                     self._gps.update_external_fix(lat, lon, alt,
                                                    source=companion.name or 'companion')
                 return

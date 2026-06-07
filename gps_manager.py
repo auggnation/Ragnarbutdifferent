@@ -311,6 +311,42 @@ class GPSManager:
             self._gpsd_sock = None
         logger.info("GPS stopped")
 
+    def attach(self, port):
+        """(Re)point the GPS reader at a serial port — called by the wardriving
+        device monitor when a GPS puck is hot-plugged or re-enumerates.
+
+        Idempotent: if already reading that port, do nothing. Prefers gpsd when
+        it is running (it owns the serial device). This is what makes GPS
+        self-healing — a puck that appears minutes after boot, or bounces
+        (disconnect→reconnect), is attached automatically with no restart.
+        """
+        if not port:
+            return False
+        target = port
+        sock = _try_gpsd()
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+            target = 'gpsd'
+        if self._running and self.port == target:
+            return True
+        if self._running:
+            self.stop()
+        self.port = target
+        return self.start()
+
+    def detach(self):
+        """Release the current GPS device — called when it is unplugged so the
+        monitor can re-attach a fresh one later."""
+        was = self.port
+        self.stop()
+        self.port = None
+        self.error = "No GPS device detected"
+        if was:
+            logger.info(f"GPS detached from {was}")
+
     def has_fix(self):
         """Return True if GPS has a valid position fix (not stale)."""
         if self.fix_quality <= 0 or self.latitude is None or self.longitude is None:

@@ -102,6 +102,19 @@ def check_authentication():
     if any(path.startswith(p) for p in static_prefixes):
         return
 
+    # Wardriving phone-access AP (KEY1): let AP clients view the minimal live
+    # page and its READ-ONLY data without login — same spirit as the captive
+    # portal. Scoped to GET on the status/track/networks endpoints so a phone
+    # on the AP can watch but cannot stop wardriving, wipe data, etc.
+    if getattr(shared_data, 'wardrive_ap_active', False) and is_ap_client_request():
+        readonly_api = (
+            '/api/wardriving/status', '/api/wardriving/track',
+            '/api/wardriving/networks', '/api/wardriving/gps',
+            '/api/wardriving/bluetooth', '/api/wardriving/cells',
+        )
+        if path in ('/', '/wardrive') or (request.method == 'GET' and path in readonly_api):
+            return
+
     # Kiosk loopback bypass: any request originating from the Pi itself
     # (the on-screen kiosk runs chromium pointed at localhost) bypasses auth.
     # Anyone with local access already has shell on the device, so this
@@ -3177,11 +3190,21 @@ def auth_regenerate_recovery():
 def index():
     """Serve the main dashboard page or captive portal for AP clients"""
     if is_ap_client_request():
+        # KEY1 wardriving AP: land straight on the minimal wardriving page.
+        if getattr(shared_data, 'wardrive_ap_active', False):
+            return send_from_directory('web', 'wardrive_mobile.html')
         # Serve captive portal for AP clients
         return send_from_directory('web', 'captive_portal.html')
     else:
         # Serve main dashboard for regular users
         return send_from_directory('web', 'index_modern.html')
+
+
+# Minimal wardriving-only page (served by the KEY1 phone-access AP)
+@app.route('/wardrive')
+def wardrive_mobile():
+    """Lightweight, offline-safe live wardriving page (stats + canvas map)."""
+    return send_from_directory('web', 'wardrive_mobile.html')
 
 
 # Add explicit captive portal route

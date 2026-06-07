@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Ragnar Wardriving</title>
+<style>
+  :root { --bg:#0b1020; --card:#161d33; --line:#27314f; --txt:#e7ecf7; --mut:#8a96b4;
+          --accent:#38bdf8; --open:#f87171; --track:#38bdf8; --dot:#a3e635; --pos:#fbbf24; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--txt);
+              font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px;
+           background:var(--card); border-bottom:1px solid var(--line); position:sticky; top:0; }
+  header h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.3px; }
+  header h1 small { color:var(--mut); font-weight:400; }
+  .gps { font-size:12px; padding:4px 10px; border-radius:999px; background:#1f2942; color:var(--mut);
+         border:1px solid var(--line); white-space:nowrap; }
+  .gps.fix { background:#0e2a1a; color:#86efac; border-color:#1c5538; }
+  main { padding:14px; max-width:720px; margin:0 auto; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 10px; text-align:center; }
+  .stat .v { font-size:24px; font-weight:700; line-height:1.1; }
+  .stat .l { font-size:11px; color:var(--mut); margin-top:4px; text-transform:uppercase; letter-spacing:.5px; }
+  .stat.open .v { color:var(--open); }
+  .mapwrap { margin-top:14px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:10px; }
+  .mapwrap .head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+  .mapwrap .head span { font-size:12px; color:var(--mut); }
+  canvas { width:100%; height:auto; display:block; background:#0a0f1e; border-radius:8px; }
+  .legend { display:flex; gap:14px; margin-top:8px; font-size:11px; color:var(--mut); flex-wrap:wrap; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; vertical-align:-1px; }
+  .foot { text-align:center; color:var(--mut); font-size:11px; margin-top:14px; }
+  .stale { opacity:.5; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ragnar <small id="dev"></small></h1>
+  <div id="gps" class="gps">GPS …</div>
+</header>
+<main>
+  <div class="grid">
+    <div class="stat"><div class="v" id="s-net">–</div><div class="l">Networks</div></div>
+    <div class="stat open"><div class="v" id="s-open">–</div><div class="l">Open / WEP</div></div>
+    <div class="stat"><div class="v" id="s-bt">–</div><div class="l">Bluetooth</div></div>
+    <div class="stat"><div class="v" id="s-24">–</div><div class="l">2.4 GHz</div></div>
+    <div class="stat"><div class="v" id="s-5">–</div><div class="l">5 GHz</div></div>
+    <div class="stat"><div class="v" id="s-6">–</div><div class="l">6 GHz</div></div>
+  </div>
+
+  <div class="mapwrap">
+    <div class="head"><strong>Live map</strong><span id="map-info">–</span></div>
+    <canvas id="map" width="700" height="460"></canvas>
+    <div class="legend">
+      <span><i style="background:var(--track)"></i>Track</span>
+      <span><i style="background:var(--dot)"></i>Network</span>
+      <span><i style="background:var(--pos)"></i>You</span>
+    </div>
+  </div>
+
+  <div class="foot" id="foot">Connecting…</div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var cv = document.getElementById('map');
+  var ctx = cv.getContext('2d');
+  var lastOk = 0;
+
+  function txt(id, v) { document.getElementById(id).textContent = v; }
+  function getJSON(url) {
+    return fetch(url, { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error(r.status); return r.json();
+    });
+  }
+
+  function num(x) { return (typeof x === 'number' && isFinite(x)) ? x : null; }
+  function netPoint(n) {
+    var lat = num(n.best_lat); var lon = num(n.best_lon);
+    if (lat === null || lon === null) { lat = num(n.latitude); lon = num(n.longitude); }
+    if (lat === null || lon === null || (lat === 0 && lon === 0)) return null;
+    return [lat, lon];
+  }
+
+  function drawMap(track, nets, here) {
+    var W = cv.width, H = cv.height, pad = 14;
+    ctx.clearRect(0, 0, W, H);
+    var pts = [];
+    track.forEach(function (p) { if (num(p[0]) !== null) pts.push(p); });
+    nets.forEach(function (p) { pts.push(p); });
+    if (here) pts.push(here);
+    if (pts.length === 0) {
+      ctx.fillStyle = '#6b7699';
+      ctx.font = '14px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('Waiting for a GPS fix…', W / 2, H / 2);
+      return;
+    }
+    var minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+    pts.forEach(function (p) {
+      if (p[0] < minLat) minLat = p[0]; if (p[0] > maxLat) maxLat = p[0];
+      if (p[1] < minLon) minLon = p[1]; if (p[1] > maxLon) maxLon = p[1];
+    });
+    var midLat = (minLat + maxLat) / 2;
+    var lonScale = Math.cos(midLat * Math.PI / 180) || 1;
+    var dLat = Math.max(maxLat - minLat, 1e-5);
+    var dLon = Math.max((maxLon - minLon) * lonScale, 1e-5);
+    var s = Math.min((W - 2 * pad) / dLon, (H - 2 * pad) / dLat);
+    // center the content
+    var offX = (W - dLon * s) / 2, offY = (H - dLat * s) / 2;
+    function X(lon) { return offX + (lon - minLon) * lonScale * s; }
+    function Y(lat) { return H - (offY + (lat - minLat) * s); }
+
+    // networks first (background)
+    ctx.fillStyle = getCSS('--dot');
+    nets.forEach(function (p) {
+      ctx.beginPath(); ctx.arc(X(p[1]), Y(p[0]), 1.6, 0, 6.2832); ctx.fill();
+    });
+    // track polyline
+    if (track.length > 1) {
+      ctx.strokeStyle = getCSS('--track'); ctx.lineWidth = 2;
+      ctx.lineJoin = 'round'; ctx.beginPath();
+      var started = false;
+      track.forEach(function (p) {
+        if (num(p[0]) === null) return;
+        var x = X(p[1]), y = Y(p[0]);
+        if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+      });
+      ctx.stroke();
+    }
+    // current position
+    if (here) {
+      ctx.fillStyle = getCSS('--pos');
+      ctx.beginPath(); ctx.arc(X(here[1]), Y(here[0]), 4.5, 0, 6.2832); ctx.fill();
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
+    }
+  }
+
+  function getCSS(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim() || '#38bdf8'; }
+
+  function refresh() {
+    Promise.all([
+      getJSON('/api/wardriving/status'),
+      getJSON('/api/wardriving/track'),
+      getJSON('/api/wardriving/networks?limit=2000&sort=best_rssi')
+    ]).then(function (res) {
+      var st = res[0] || {}, stats = st.stats || {}, gps = st.gps || {};
+      txt('dev', st.device_name ? '· ' + st.device_name : '');
+      txt('s-net', stats.total_networks != null ? stats.total_networks : (st.total_networks || 0));
+      txt('s-open', (stats.open_networks || 0) + ' / ' + (stats.wep_networks || 0));
+      txt('s-bt', stats.bluetooth_devices != null ? stats.bluetooth_devices : (st.bluetooth_count || 0));
+      txt('s-24', stats.band_2_4ghz || 0);
+      txt('s-5', stats.band_5ghz || 0);
+      txt('s-6', stats.band_6ghz || 0);
+
+      var g = document.getElementById('gps');
+      var here = null;
+      if (gps.has_fix) {
+        here = [gps.latitude, gps.longitude];
+        g.className = 'gps fix';
+        g.textContent = 'GPS ' + gps.latitude.toFixed(4) + ', ' + gps.longitude.toFixed(4);
+      } else if (gps.connected) {
+        g.className = 'gps';
+        var iv = gps.satellites_in_view;
+        g.textContent = (iv ? 'GPS searching ' + iv + 'v' : 'GPS searching…');
+      } else {
+        g.className = 'gps'; g.textContent = 'No GPS';
+      }
+
+      var track = (res[1] && res[1].track) || [];
+      var rawNets = (res[2] && res[2].networks) || [];
+      var nets = [];
+      rawNets.forEach(function (n) { var p = netPoint(n); if (p) nets.push(p); });
+      txt('map-info', track.length + ' pts · ' + nets.length + ' located');
+      drawMap(track, nets, here);
+
+      lastOk = Date.now();
+      document.body.classList.remove('stale');
+      txt('foot', 'Live · updated ' + new Date().toLocaleTimeString());
+    }).catch(function () {
+      if (Date.now() - lastOk > 8000) document.body.classList.add('stale');
+      txt('foot', 'Reconnecting…');
+    });
+  }
+
+  refresh();
+  setInterval(refresh, 3000);
+})();
+</script>
+</body>
+</html>

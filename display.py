@@ -22,6 +22,7 @@ import logging
 import random
 import sys
 import csv
+import math
 from PIL import Image, ImageDraw, ImageFont
 from init_shared import shared_data  
 from comment import Commentaireia
@@ -784,7 +785,7 @@ class Display:
         self._page_cache[key] = (now, data)
         return data
 
-    def _draw_page_frame(self, draw, title):
+    def _draw_page_frame(self, draw, title, hint="K1:Home K2:Flip K3:Next K4:Rst"):
         """Draw standard page frame: border, title, divider, footer."""
         w = getattr(self, 'render_w', self.shared_data.width)
         h = getattr(self, 'render_h', self.shared_data.height)
@@ -796,7 +797,7 @@ class Display:
         draw.text((int(4 * sx), int(4 * sy)), title, font=font_title, fill=0)
         draw.line((1, int(22 * sy), w - 1, int(22 * sy)), fill=0)
         draw.line((1, h - int(18 * sy), w - 1, h - int(18 * sy)), fill=0)
-        draw.text((int(4 * sx), h - int(16 * sy)), "K1:Home K2:Flip K3:Next K4:Rst", font=font, fill=0)
+        draw.text((int(4 * sx), h - int(16 * sy)), hint, font=font, fill=0)
 
     def _draw_stat_rows(self, draw, y, stats):
         """Draw key-value stat rows. Returns final y position."""
@@ -1270,7 +1271,9 @@ class Display:
 
     def _render_wardriving_page(self, image, draw):
         """Render a wardriving status page for EPD e-paper displays."""
-        self._draw_page_frame(draw, "WARDRIVING")
+        ap_on = getattr(self.shared_data, 'wardrive_ap_active', False)
+        hint = "K1:AP-off K2:Flip K3:Map K4:WiFi" if ap_on else "K1:AP K2:Flip K3:Map K4:WiFi"
+        self._draw_page_frame(draw, "WARDRIVING", hint=hint)
         sx = getattr(self, 'render_sx', self.scale_factor_x)
         sy = getattr(self, 'render_sy', self.scale_factor_y)
         y = int(26 * sy)
@@ -1329,6 +1332,10 @@ class Display:
         # Static rows are always rendered: Networks, Open/WEP, 2.4 GHz, 5 GHz.
         # "Connected WiFi" and 6 GHz are only added when they have a value.
         stats_top = []
+        # Phone-access AP (KEY1) — show its URL so the user knows where to browse.
+        if ap_on:
+            ap_url = getattr(self.shared_data, 'wardrive_ap_url', '') or ''
+            stats_top.append(("AP Web", ap_url or "on"))
         if wifi_str is not None:
             stats_top.append(("Connected WiFi", wifi_str))
         stats_top.extend([
@@ -1418,6 +1425,97 @@ class Display:
         if band_mode and len(details) >= 2:
             y = self._draw_adapter_rows(draw, y, [("Mode", band_mode)])
         self._draw_stat_rows(draw, y, stats_bottom)
+
+    def _render_wardriving_map_page(self, image, draw):
+        """Render a live wardriving map (GPS breadcrumb + network dots).
+
+        Toggled by KEY3 while wardriving. Auto-scales the current session's
+        GPS track and located networks to the screen; the current fix is
+        marked with a ringed dot.
+        """
+        ap_on = getattr(self.shared_data, 'wardrive_ap_active', False)
+        hint = "K1:AP-off K2:Flip K3:Stats K4:WiFi" if ap_on else "K1:AP K2:Flip K3:Stats K4:WiFi"
+        self._draw_page_frame(draw, "WARDRIVE MAP", hint=hint)
+        w = getattr(self, 'render_w', self.shared_data.width)
+        h = getattr(self, 'render_h', self.shared_data.height)
+        sx = getattr(self, 'render_sx', self.scale_factor_x)
+        sy = getattr(self, 'render_sy', self.scale_factor_y)
+        font = self.shared_data.font_arial9
+
+        # Plot rectangle between the title divider and the footer divider.
+        top = int(24 * sy)
+        bottom = h - int(20 * sy)
+        left = int(3 * sx)
+        right = w - int(3 * sx)
+
+        # Pull track + located networks straight from the live session.
+        track, nets, here = [], [], None
+        try:
+            from webapp_modern import _get_wardriving_engine
+            engine = _get_wardriving_engine()
+            session = getattr(engine, 'session', None)
+            wd = self._get_wardriving_data() or {}
+            gps = wd.get('gps') or {}
+            if gps.get('has_fix'):
+                here = (gps.get('latitude'), gps.get('longitude'))
+            if session is not None:
+                track = [p for p in (session.get_gps_track() or [])
+                         if isinstance(p, (list, tuple)) and p[0] is not None and p[1] is not None]
+                for n in session.get_networks(limit=2000):
+                    lat = n.get('best_lat') if n.get('best_lat') else n.get('latitude')
+                    lon = n.get('best_lon') if n.get('best_lon') else n.get('longitude')
+                    if lat and lon and not (lat == 0 and lon == 0):
+                        nets.append((lat, lon))
+        except Exception:
+            pass
+
+        pts = list(track) + nets + ([here] if here and here[0] is not None else [])
+        if not pts:
+            draw.text((left + int(4 * sx), top + int(20 * sy)),
+                      "Waiting for GPS fix...", font=font, fill=0)
+            return
+
+        lats = [p[0] for p in pts]
+        lons = [p[1] for p in pts]
+        min_lat, max_lat = min(lats), max(lats)
+        min_lon, max_lon = min(lons), max(lons)
+        mid_lat = (min_lat + max_lat) / 2.0
+        lon_scale = math.cos(math.radians(mid_lat)) or 1.0
+        d_lat = max(max_lat - min_lat, 1e-5)
+        d_lon = max((max_lon - min_lon) * lon_scale, 1e-5)
+        scale = min((right - left) / d_lon, (bottom - top) / d_lat)
+        off_x = left + ((right - left) - d_lon * scale) / 2.0
+        off_y = top + ((bottom - top) - d_lat * scale) / 2.0
+
+        def to_xy(lat, lon):
+            x = off_x + (lon - min_lon) * lon_scale * scale
+            # invert Y so north is up
+            y = off_y + (max_lat - lat) * scale
+            return int(x), int(y)
+
+        # Network dots (background)
+        for lat, lon in nets:
+            x, y = to_xy(lat, lon)
+            draw.point((x, y), fill=0)
+
+        # Track polyline
+        prev = None
+        for p in track:
+            xy = to_xy(p[0], p[1])
+            if prev is not None:
+                draw.line((prev[0], prev[1], xy[0], xy[1]), fill=0)
+            prev = xy
+
+        # Current position — ringed marker
+        if here and here[0] is not None:
+            x, y = to_xy(here[0], here[1])
+            draw.ellipse((x - 3, y - 3, x + 3, y + 3), outline=0)
+            draw.ellipse((x - 1, y - 1, x + 1, y + 1), fill=0)
+
+        # Footer counts (just above the frame's key-hint line)
+        info = f"{len(track)}pts {len(nets)}net"
+        draw.text((right - int(font.getlength(info)) - int(2 * sx), top + int(2 * sy)),
+                  info, font=font, fill=0)
 
     # ------------------------------------------------------------------
     # GC9A01 round-display renderer
@@ -2606,7 +2704,13 @@ class Display:
                     is_running = bool(wd_data and wd_data.get('running'))
                     never_started = not (wd_data and wd_data.get('session_id'))
                     if is_running or (wd_boot and never_started):
-                        self._render_wardriving_page(image, draw)
+                        # KEY3 toggles a live map while wardriving is running.
+                        show_map = (is_running and self.button_listener
+                                    and getattr(self.button_listener, 'wardrive_map', False))
+                        if show_map:
+                            self._render_wardriving_map_page(image, draw)
+                        else:
+                            self._render_wardriving_page(image, draw)
                         _wd_override = True
 
                 if not _wd_override:

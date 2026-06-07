@@ -2,10 +2,17 @@
 # GPIO pins: KEY1=5, KEY2=6, KEY3=13, KEY4=19
 # Uses gpiozero (same library as the Waveshare EPD driver) to avoid conflicts
 #
-# KEY1: Swap to Pwnagotchi (with 10s cooldown)
-# KEY2: Flip screen upside down (toggle)
-# KEY3: Next page - rotate through all pages
-# KEY4: Restart Ragnar service
+# Default (not wardriving):
+#   KEY1: Swap to Pwnagotchi (with 10s cooldown)
+#   KEY2: Flip screen upside down (toggle)
+#   KEY3: Next page - rotate through all pages
+#   KEY4: Restart Ragnar service
+#
+# While wardriving is active the keys switch to a wardriving layer:
+#   KEY1: Toggle a phone-access AP serving the minimal wardriving page
+#   KEY2: Flip the display (same rotation cycle as default)
+#   KEY3: Toggle the live e-paper map (GPS track + network dots)
+#   KEY4: Connect to a known WiFi (wardriving keeps running)
 
 import logging
 import threading
@@ -20,6 +27,13 @@ KEY1_PIN = 5
 KEY2_PIN = 6
 KEY3_PIN = 13
 KEY4_PIN = 19
+
+# Other apps that drive the same 2.7" HAT and grab these exact GPIO buttons.
+# If one is running it claims the pins first and Ragnar's listener fails with
+# 'GPIO busy'. Stopped on demand when wardriving starts so Ragnar can own the
+# keys (see EPDButtonListener.ensure_available). Override via config key
+# 'wardriving_button_reclaim_services'.
+CONFLICTING_BUTTON_SERVICES = ['airprint.service']
 
 # Display pages
 PAGE_MAIN = 0         # Default Ragnar display
@@ -41,6 +55,7 @@ class EPDButtonListener:
         self.available = False
         self._buttons = []
         self._swap_cooldown = 0  # timestamp of last swap to prevent double triggers
+        self.wardrive_map = False  # KEY3 while wardriving: show live map page
 
     def start(self):
         """Start the button listener using gpiozero callbacks."""
@@ -75,13 +90,71 @@ class EPDButtonListener:
                 pass
         self._buttons = []
 
+    def ensure_available(self):
+        """Make sure Ragnar owns the HAT buttons, reclaiming them if needed.
+
+        Called when wardriving starts. If the listener never got the GPIO
+        lines because another app grabbed them first (e.g. airprint.service —
+        a standalone Waveshare button app), stop those services and retry once.
+        Returns True if the buttons are usable afterwards.
+        """
+        if self.available:
+            return True
+        services = self.shared_data.config.get(
+            'wardriving_button_reclaim_services', CONFLICTING_BUTTON_SERVICES)
+        freed = False
+        for svc in services or []:
+            if self._stop_service(svc):
+                freed = True
+        if freed:
+            time.sleep(0.5)   # let the kernel release the GPIO lines
+            self.stop()       # drop any partial handles from the failed start
+            self.start()      # retry claiming the pins
+        return self.available
+
+    @staticmethod
+    def _stop_service(name):
+        """Stop a systemd service holding the HAT buttons (only if active)."""
+        try:
+            active = subprocess.run(['systemctl', 'is-active', name],
+                                    capture_output=True, text=True).stdout.strip()
+            if active != 'active':
+                return False
+            logger.info(f"Reclaiming HAT buttons: stopping {name}")
+            subprocess.run(['sudo', 'systemctl', 'stop', name],
+                           capture_output=True, text=True, timeout=10)
+            return True
+        except Exception as e:
+            logger.warning(f"Could not stop {name}: {e}")
+            return False
+
+    def _is_wardriving_active(self):
+        """Return True if the wardriving engine is currently running."""
+        try:
+            ragnar = getattr(self.shared_data, 'ragnar_instance', None)
+            engine = getattr(ragnar, '_wd_engine', None) if ragnar else None
+            if engine is not None:
+                return bool(getattr(engine, '_running', False))
+        except Exception:
+            pass
+        return False
+
+    def _wifi_manager(self):
+        """Return the WiFiManager instance, or None if not reachable."""
+        ragnar = getattr(self.shared_data, 'ragnar_instance', None)
+        return getattr(ragnar, 'wifi_manager', None) if ragnar else None
+
     def _on_key1(self):
-        """KEY1: Swap to Pwnagotchi (with 10s cooldown)."""
+        """KEY1: wardriving → toggle phone-access AP; else swap to Pwnagotchi."""
         now = time.time()
         if now - self._swap_cooldown < 10:
-            logger.debug("KEY1 swap ignored - cooldown active")
+            logger.debug("KEY1 ignored - cooldown active")
             return
         self._swap_cooldown = now
+
+        if self._is_wardriving_active():
+            self._toggle_wardrive_ap()
+            return
 
         try:
             current_mode = self.shared_data.config.get('pwnagotchi_mode', 'ragnar')
@@ -106,16 +179,45 @@ class EPDButtonListener:
         logger.info(f"Button KEY2: Display rotation set to {new_rotation}°")
 
     def _on_key3(self):
-        """KEY3: Next page - rotate through all pages."""
+        """KEY3: wardriving → toggle live map page; else next page."""
+        if self._is_wardriving_active():
+            self.wardrive_map = not self.wardrive_map
+            logger.info(f"Button KEY3: wardriving map {'ON' if self.wardrive_map else 'OFF'}")
+            return
         self.current_page = (self.current_page + 1) % PAGE_COUNT
         page_names = ["Main", "Network", "Vuln", "Discovered", "Advanced", "Traffic"]
         name = page_names[self.current_page] if self.current_page < len(page_names) else str(self.current_page)
         logger.info(f"Button KEY3: Next page -> {name} ({self.current_page})")
 
     def _on_key4(self):
-        """KEY4: Restart Ragnar service."""
+        """KEY4: wardriving → connect to a known WiFi; else restart service."""
+        if self._is_wardriving_active():
+            logger.info("Button KEY4: connecting to known WiFi (wardriving continues)...")
+            threading.Thread(target=self._connect_known_wifi, daemon=True).start()
+            return
         logger.info("Button KEY4: Restarting Ragnar service...")
         threading.Thread(target=self._do_restart, daemon=True).start()
+
+    def _toggle_wardrive_ap(self):
+        """KEY1 (wardriving): toggle the phone-access AP on a spare adapter."""
+        wifi = self._wifi_manager()
+        if wifi is None:
+            logger.warning("KEY1: wifi_manager not available; cannot toggle wardrive AP")
+            return
+        logger.info("Button KEY1: toggling wardriving phone-access AP...")
+        threading.Thread(target=wifi.start_wardrive_ap, daemon=True).start()
+
+    def _connect_known_wifi(self):
+        """KEY4 (wardriving): connect to a known WiFi without stopping scans."""
+        wifi = self._wifi_manager()
+        if wifi is None:
+            logger.warning("KEY4: wifi_manager not available; cannot connect")
+            return
+        try:
+            ok = wifi.try_connect_known_networks()
+            logger.info(f"KEY4: known-WiFi connect {'succeeded' if ok else 'found nothing/failed'}")
+        except Exception as e:
+            logger.error(f"KEY4: known-WiFi connect error: {e}")
 
     @staticmethod
     def _do_restart():
