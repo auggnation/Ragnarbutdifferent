@@ -160,6 +160,17 @@ def _get_wifi_iface():
     from shared import detect_wifi_interface
     return detect_wifi_interface(shared_data.config.get('wifi_default_interface', 'auto'))
 
+
+def _get_wifi_manager_status():
+    """Query the Ragnar WiFi manager for live WiFi/AP state."""
+    try:
+        wifi_wrapper = getattr(shared_data, 'ragnar_instance', None)
+        if wifi_wrapper and hasattr(wifi_wrapper, 'wifi_manager'):
+            return wifi_wrapper.wifi_manager.get_status() or {}
+    except Exception as exc:
+        logger.debug(f"Unable to query WiFi manager status: {exc}")
+    return {}
+
 SEP_SCAN_COMMAND = ['sudo', 'sep-scan']
 MAC_REGEX = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 PWN_INSTALL_SCRIPT = os.path.join(shared_data.currentdir, 'scripts', 'install_pwnagotchi.sh')
@@ -3272,6 +3283,11 @@ def get_status():
         # Background thread handles syncing every SYNC_BACKGROUND_INTERVAL seconds
         # This endpoint now returns cached data instantly for fast dashboard loading
         
+        wifi_status = _get_wifi_manager_status()
+        ethernet_ip = _get_active_ethernet_ip()
+        wifi_ip = safe_str(wifi_status.get('wifi_ip', ''))
+        ap_ip = safe_str(wifi_status.get('ap_ip', ''))
+        current_ip = ethernet_ip or wifi_ip or ap_ip or ''
         status_data = {
             'ragnar_status': safe_str(shared_data.ragnarstatustext),
             'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
@@ -3290,8 +3306,14 @@ def get_status():
             'wifi_connected': safe_bool(shared_data.wifi_connected),
             'current_ssid': safe_str(getattr(shared_data, 'current_wifi_ssid', '') or get_current_wifi_ssid() or ''),
             'ethernet_connected': safe_bool(is_ethernet_available()),
-            'ethernet_ip': _get_active_ethernet_ip(),
+            'ethernet_ip': ethernet_ip,
             'ethernet_interface': _get_active_ethernet_name(),
+            'wifi_ip': wifi_ip,
+            'ap_ip': ap_ip,
+            'ap_mode_active': safe_bool(wifi_status.get('ap_mode_active', False)),
+            'ap_ssid': safe_str(wifi_status.get('ap_ssid', '')),
+            'ap_clients_count': safe_int(wifi_status.get('ap_clients_count', 0)),
+            'current_ip': current_ip,
             'bluetooth_active': safe_bool(shared_data.bluetooth_active),
             'pan_connected': safe_bool(shared_data.pan_connected),
             'usb_active': safe_bool(shared_data.usb_active),
@@ -12681,7 +12703,11 @@ def get_current_status():
     except Exception as e:
         logger.debug(f"Could not get WiFi status from manager: {e}")
 
-    return {
+ethernet_ip = _get_active_ethernet_ip()
+        wifi_ip = safe_str(wifi_status.get('wifi_ip', ''))
+        ap_ip = safe_str(wifi_status.get('ap_ip', ''))
+        current_ip = ethernet_ip or wifi_ip or ap_ip or ''
+        return {
         'ragnar_status': safe_str(shared_data.ragnarstatustext),
         'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
         'ragnar_says': safe_str(shared_data.ragnarsays),
@@ -12700,13 +12726,17 @@ def get_current_status():
         'scanned_network_count': safe_int(getattr(shared_data, 'scanned_networks_count', 0)),
         'wifi_connected': wifi_status.get('wifi_connected', safe_bool(shared_data.wifi_connected)),
         'current_ssid': wifi_status.get('current_ssid'),
+        'wifi_ip': wifi_ip,
+        'ap_ip': ap_ip,
         'ap_mode_active': wifi_status.get('ap_mode_active', False),
         'ap_ssid': wifi_status.get('ap_ssid'),
+        'ap_clients_count': safe_int(wifi_status.get('ap_clients_count', 0)),
+        'current_ip': current_ip,
         'bluetooth_active': safe_bool(shared_data.bluetooth_active),
         'pan_connected': safe_bool(shared_data.pan_connected),
         'usb_active': safe_bool(shared_data.usb_active),
         'ethernet_connected': safe_bool(is_ethernet_available()),
-        'ethernet_ip': _get_active_ethernet_ip(),
+        'ethernet_ip': ethernet_ip,
         'ethernet_interface': _get_active_ethernet_name(),
         'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
         'headless_mode': safe_bool(getattr(shared_data, 'headless_mode', False)),
@@ -16767,6 +16797,10 @@ def get_dashboard_quick():
         except Exception:
             pass  # Silently fail - non-critical for dashboard
 
+        ethernet_ip = _get_active_ethernet_ip()
+        wifi_ip = safe_str(wifi_status.get('wifi_ip', ''))
+        ap_ip = safe_str(wifi_status.get('ap_ip', ''))
+        current_ip = ethernet_ip or wifi_ip or ap_ip or ''
         combined_data = {
             'network_ssid': network_ssid,
             'network_slug': network_slug,
@@ -16799,13 +16833,17 @@ def get_dashboard_quick():
             'automation_enabled': is_orchestrator_running(),
             'wifi_connected': wifi_status.get('wifi_connected', safe_bool(shared_data.wifi_connected)),
             'current_ssid': wifi_status.get('current_ssid'),
+            'wifi_ip': wifi_ip,
+            'ap_ip': ap_ip,
+            'current_ip': current_ip,
             'ap_mode_active': wifi_status.get('ap_mode_active', False),
             'ap_ssid': wifi_status.get('ap_ssid'),
+            'ap_clients_count': safe_int(wifi_status.get('ap_clients_count', 0)),
             'bluetooth_active': safe_bool(shared_data.bluetooth_active),
             'pan_connected': safe_bool(shared_data.pan_connected),
             'usb_active': safe_bool(shared_data.usb_active),
             'ethernet_connected': safe_bool(is_ethernet_available()),
-            'ethernet_ip': _get_active_ethernet_ip(),
+            'ethernet_ip': ethernet_ip,
             'ethernet_interface': _get_active_ethernet_name(),
             'manual_mode': safe_bool(shared_data.config.get('manual_mode', False)),
             'release_gate': _build_release_gate_payload(),

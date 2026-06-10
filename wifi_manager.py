@@ -114,8 +114,8 @@ class WiFiManager:
         self.failsafe_disconnect_threshold = 300  # 5 minutes of disconnection before counting as a cycle
         
         # AP mode settings
-        self.ap_ssid = shared_data.config.get('wifi_ap_ssid', 'Ragnar')
-        self.ap_password = shared_data.config.get('wifi_ap_password', 'ragnarconnect')
+        self.ap_ssid = shared_data.config.get('wifi_ap_ssid', 'RAGNAR WIFI')
+        self.ap_password = shared_data.config.get('wifi_ap_password', 'ragnarThe Viking')
         self.ap_interface = self.default_wifi_interface
         self.ap_ip = "192.168.4.1"
         self.ap_subnet = "192.168.4.0/24"
@@ -145,8 +145,8 @@ class WiFiManager:
             self.known_networks = config.get('wifi_known_networks', [])
             
             # Load AP settings
-            self.ap_ssid = config.get('wifi_ap_ssid', 'Ragnar')
-            self.ap_password = config.get('wifi_ap_password', 'ragnarconnect')
+            self.ap_ssid = config.get('wifi_ap_ssid', 'RAGNAR WIFI')
+            self.ap_password = config.get('wifi_ap_password', 'ragnarThe Viking')
             self.connection_timeout = config.get('wifi_connection_timeout', 60)
             self.max_connection_attempts = config.get('wifi_max_attempts', 3)
             
@@ -2845,6 +2845,21 @@ port=0
         self.shared_data.wifi_connected = wifi_connected
         self.shared_data.network_connected = network_connected
         
+        wifi_ip = None
+        try:
+            wifi_interfaces = gather_wifi_interfaces(self.default_wifi_interface)
+            for iface in wifi_interfaces:
+                if iface.get('connected') and iface.get('ip_address'):
+                    wifi_ip = iface.get('ip_address')
+                    break
+            if not wifi_ip:
+                for iface in wifi_interfaces:
+                    if iface.get('name') == self.default_wifi_interface and iface.get('ip_address'):
+                        wifi_ip = iface.get('ip_address')
+                        break
+        except Exception as exc:
+            self.logger.debug(f"Unable to determine Wi-Fi IP address: {exc}")
+
         status = {
             'wifi_connected': wifi_connected,
             'network_connected': network_connected,
@@ -2853,6 +2868,10 @@ port=0
             'lan_interface': self.last_ethernet_interface,
             'ap_mode_active': self.ap_mode_active,
             'current_ssid': current_ssid,
+            'ap_ssid': self.ap_ssid,
+            'ap_ip': self.ap_ip,
+            'wifi_ip': wifi_ip,
+            'ap_clients_count': getattr(self, 'ap_clients_count', 0),
             'known_networks_count': len(self.known_networks),
             'connection_attempts': self.connection_attempts,
             'startup_complete': self.startup_complete,

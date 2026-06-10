@@ -713,11 +713,11 @@ setup_ragnar() {
         fi
         # Proceed with clone (falls back to wget tarball if git is broken)
         log "INFO" "Cloning ragnar repository"
-        if ! clone_or_download https://github.com/PierreGode/Ragnar.git Ragnar main; then
+        if ! clone_or_download https://github.com/auggnation/Ragnarbutdifferent.git Ragnar main; then
             log "ERROR" "Cannot obtain Ragnar repository — installation cannot continue"
             log "ERROR" "If git crashes with 'Illegal instruction', your git binary may be"
             log "ERROR" "compiled for a newer ARM architecture. Try: sudo apt reinstall git"
-            log "ERROR" "or download manually: wget https://github.com/PierreGode/Ragnar/archive/refs/heads/main.tar.gz"
+            log "ERROR" "or download manually: wget https://github.com/auggnation/Ragnarbutdifferent/archive/refs/heads/main.tar.gz"
             clean_exit 1
         fi
     fi

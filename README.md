@@ -23,7 +23,7 @@ Ragnar is a fork of the awesome [Bjorn](https://github.com/infinition/Bjorn) pro
 ## Quick Install
 
 ```bash
-wget https://raw.githubusercontent.com/PierreGode/Ragnar/main/install_ragnar.sh
+wget https://raw.githubusercontent.com/auggnation/Ragnarbutdifferent/main/install_ragnar.sh
 sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
 # On Raspberry Pi: choose between e-Paper HAT, server/headless, or Pineapple Pager deployment.
 # On other hardware: choose between server install or Pineapple Pager deployment.
@@ -45,7 +45,7 @@ Access Ragnar's dashboard at `http://<ragnar-ip>:8000`
 - Hardware profile auto-detection (Pi Zero 2W, Pi 4, Pi 5)
 
 **WiFi Configuration Portal** — When Ragnar can't connect to a known network, it creates a WiFi hotspot:
-1. Connect to WiFi network `Ragnar` (password: `ragnarconnect`)
+1. Connect to WiFi network `RAGNAR WIFI` (password: `ragnarThe Viking`)
 2. Navigate to `http://192.168.4.1:8000`
 3. Configure your WiFi credentials via the mobile-friendly interface
 4. Ragnar will automatically retry known WiFi after some time if the AP is unused

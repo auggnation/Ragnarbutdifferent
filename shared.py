@@ -675,8 +675,8 @@ class SharedData:
             "__title_wifi__": "Wi-Fi Management",
             "wifi_known_networks": [],
             "wifi_default_interface": "auto",
-            "wifi_ap_ssid": "Ragnar",
-            "wifi_ap_password": "ragnarconnect",
+            "wifi_ap_ssid": "RAGNAR WIFI",
+            "wifi_ap_password": "ragnarThe Viking",
             "wifi_connection_timeout": 60,
             "wifi_max_attempts": 3,
             "wifi_scan_interval": 300,
@@ -1085,6 +1085,11 @@ class SharedData:
         self.networkkbnbr = 0
         self.attacksnbr = 0
         self.vulnerable_host_count = 0
+        self.last_speed_test_mbps = 0.0
+        self.last_speed_test_time = None
+        self.last_speed_test_status = 'never'
+        self.last_speed_test_url = ''
+        self.last_speed_test_error = ''
         self.gamification_data = {}
         self.points_per_level = 200
         self.points_per_mac = 15

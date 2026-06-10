@@ -23,11 +23,13 @@ import random
 import sys
 import csv
 import math
+from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 from init_shared import shared_data  
 from comment import Commentaireia
 from logger import Logger
-import subprocess  
+import subprocess
+import urllib.request
 from shared import detect_wifi_interface
 
 # Map rotation angle → PIL transpose operation
@@ -129,6 +131,10 @@ class Display:
         self.update_shared_data_thread.daemon = True
         self.update_shared_data_thread.start()
 
+        self.speed_test_thread = threading.Thread(target=self.schedule_speed_tests)
+        self.speed_test_thread.daemon = True
+        self.speed_test_thread.start()
+
         self.update_vuln_count_thread = threading.Thread(target=self.schedule_update_vuln_count)
         self.update_vuln_count_thread.daemon = True
         self.update_vuln_count_thread.start()
@@ -162,6 +168,63 @@ class Display:
             self.update_shared_data()
             time.sleep(5)  # Check every 5 seconds for faster WiFi/SSH status updates
 
+    def schedule_speed_tests(self):
+        """Run periodic speed tests in the background."""
+        while not self.shared_data.display_should_exit:
+            try:
+                self._run_speed_test()
+            except Exception as e:
+                logger.warning(f"Speed test thread failed: {e}")
+            interval = int(self.config.get('speed_test_interval_seconds', 1800) or 1800)
+            if interval < 30:
+                interval = 30
+            sleep_until = time.time() + interval
+            while not self.shared_data.display_should_exit and time.time() < sleep_until:
+                time.sleep(1)
+
+    def _run_speed_test(self):
+        """Perform a small network download speed test and store the result."""
+        urls = self.config.get('speed_test_urls', [
+            'https://speedtest.speakeasy.net/1mb.bin',
+            'https://speedtest.tele2.net/1MB.zip',
+        ])
+        max_bytes = int(self.config.get('speed_test_bytes', 1_000_000) or 1_000_000)
+        timeout = int(self.config.get('speed_test_timeout_seconds', 15) or 15)
+        best_result = None
+        last_error = None
+
+        for url in urls:
+            try:
+                start_time = time.time()
+                req = urllib.request.Request(url, headers={'User-Agent': 'RagnarSpeedTest/1.0'})
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    total_bytes = 0
+                    while total_bytes < max_bytes:
+                        chunk = resp.read(min(65536, max_bytes - total_bytes))
+                        if not chunk:
+                            break
+                        total_bytes += len(chunk)
+
+                elapsed = max(0.001, time.time() - start_time)
+                mbps = total_bytes * 8 / 1_000_000 / elapsed
+                self.shared_data.last_speed_test_mbps = round(mbps, 2)
+                self.shared_data.last_speed_test_time = datetime.now().isoformat()
+                self.shared_data.last_speed_test_status = 'OK'
+                self.shared_data.last_speed_test_url = url
+                self.shared_data.last_speed_test_error = ''
+                best_result = True
+                break
+            except Exception as exc:
+                last_error = str(exc)
+                logger.warning(f"Speed test failed for {url}: {exc}")
+
+        if not best_result:
+            self.shared_data.last_speed_test_mbps = 0.0
+            self.shared_data.last_speed_test_time = datetime.now().isoformat()
+            self.shared_data.last_speed_test_status = 'FAILED'
+            self.shared_data.last_speed_test_url = urls[-1] if urls else ''
+            self.shared_data.last_speed_test_error = last_error or 'No URL available'
+
     def schedule_update_vuln_count(self):
         """Periodically update the vulnerability count on the display."""
         while not self.shared_data.display_should_exit:
@@ -169,7 +232,7 @@ class Display:
             time.sleep(300)
 
     def update_main_image(self):
-        """Update the main image on the display with the latest immagegen data."""
+        """Update the main image on the display with the latest imagegen data."""
         while not self.shared_data.display_should_exit:
             try:
                 self.shared_data.update_image_randomizer()
@@ -180,6 +243,33 @@ class Display:
                 time.sleep(random.uniform(self.shared_data.image_display_delaymin, self.shared_data.image_display_delaymax))
             except Exception as e:
                 logger.error(f"An error occurred in update_main_image: {e}")
+
+    def _get_main_traffic_state(self):
+        """Fetch recent traffic metrics used by the main tracker page."""
+        try:
+            data = self._get_cached_page_data('main_traffic', self._fetch_traffic_data, ttl=2)
+            return data or {}
+        except Exception as e:
+            logger.debug(f"Error reading traffic for main page: {e}")
+            return {}
+
+    def _is_high_traffic(self, traffic_data):
+        """Decide whether recent traffic should trigger attack-mode visuals."""
+        if not traffic_data:
+            return False
+
+        try:
+            throughput = float(traffic_data.get('throughput_mbps', 0.0) or 0.0)
+            pkts_sec = float(traffic_data.get('packets_per_second', 0.0) or 0.0)
+            alerts = int(traffic_data.get('total_alerts', 0) or 0)
+        except Exception:
+            return False
+
+        threshold_mbps = float(self.config.get('traffic_attack_threshold_mbps', 1.0))
+        threshold_pps = float(self.config.get('traffic_attack_threshold_pps', 150.0))
+        threshold_alerts = int(self.config.get('traffic_attack_alerts', 1))
+
+        return throughput >= threshold_mbps or pkts_sec >= threshold_pps or alerts >= threshold_alerts
 
     def get_open_files(self):
         """Get the number of open FD files on the system."""
@@ -1233,16 +1323,39 @@ class Display:
             connections = data.get('active_connections', 0)
             alerts = data.get('total_alerts', 0)
             dns = data.get('dns_queries_captured', 0)
+            top_host = 'N/A'
+            analyzer = getattr(self.shared_data, '_traffic_analyzer', None)
+            if analyzer is not None:
+                try:
+                    top_hosts = analyzer.get_top_hosts(limit=1)
+                    if top_hosts:
+                        top_host = top_hosts[0].get('ip', 'N/A')
+                except Exception:
+                    top_host = 'N/A'
+
+            last_speed = getattr(self.shared_data, 'last_speed_test_mbps', 0.0)
+            last_speed_time = getattr(self.shared_data, 'last_speed_test_time', None)
+            last_speed_status = getattr(self.shared_data, 'last_speed_test_status', 'never')
+            if last_speed and last_speed_status == 'OK':
+                speed_display = f"{last_speed:.1f} Mbps"
+            else:
+                speed_display = last_speed_status.title()
+            if last_speed_time:
+                try:
+                    last_speed_time = datetime.fromisoformat(last_speed_time).strftime('%Y-%m-%d %H:%M')
+                except Exception:
+                    pass
 
             status_str = status.upper()
             stats = [
                 ("Capture", status_str),
                 ("Pkts/sec", f"{pkts_sec:.1f}"),
                 ("Throughput", f"{throughput:.2f} Mbps"),
-                ("Total pkts", str(total_pkts)),
-                ("Total data", str(total_bytes_h)),
                 ("Hosts seen", str(unique_hosts)),
                 ("Connections", str(connections)),
+                ("Top host", top_host),
+                ("Speed test", speed_display),
+                ("Last check", last_speed_time or 'never'),
                 ("Alerts", str(alerts)),
                 ("DNS queries", str(dns)),
             ]
@@ -2754,100 +2867,81 @@ class Display:
                     sx = self.scale_factor_x
                     sy = self.scale_factor_y
 
-                # Check PiSugar once per frame for title sizing + battery text
-                _pisugar_available = False
-                try:
-                    _ri = getattr(self.shared_data, 'ragnar_instance', None)
-                    _ps = getattr(_ri, 'pisugar_listener', None) if _ri else None
-                    _pisugar_available = _ps and _ps.available
-                except Exception:
-                    pass
-                if _pisugar_available:
-                    draw.text((int(40 * sx), int(6 * sy)), "RAGNAR", font=self.shared_data.font_viking_sm, fill=0)
-                else:
-                    draw.text((int(37 * sx), int(5 * sy)), "RAGNAR", font=self.shared_data.font_viking, fill=0)
-                draw.text((int(110 * sx), int(170 * sy)), self.manual_mode_txt, font=self.shared_data.font_arial14, fill=0)
-                
-                # Show AP status or WiFi status in the top-left corner
-                if hasattr(self.shared_data, 'ap_mode_active') and self.shared_data.ap_mode_active:
-                    ap_text = "AP"
-                    if hasattr(self.shared_data, 'ap_client_count') and self.shared_data.ap_client_count > 0:
-                        ap_text = f"AP:{self.shared_data.ap_client_count}"
-                    draw.text((int(3 * sx), int(3 * sy)), ap_text, font=self.shared_data.font_arial9, fill=0)
-                elif self.shared_data.wifi_connected:
-                    self.render_wifi_wave_indicator(image, draw)
-                if self.shared_data.pan_connected:
-                    image.paste(self.shared_data.connected, (int(104 * sx), int(3 * sy)))
-                if self.shared_data.usb_active:
-                    image.paste(self.shared_data.usb, (int(90 * sx), int(4 * sy)))
+                # Use traffic metrics to decide whether the tracker should show attack-mode visuals.
+                traffic_data = self._get_main_traffic_state()
+                high_traffic = self._is_high_traffic(traffic_data)
 
-                # Battery percentage (PiSugar) - flush right in header
-                if _pisugar_available:
+                display_label = "TRAFFIC ATTACK" if high_traffic else "DESKTOP TRACKER"
+                display_image = self.shared_data.attack if high_traffic else self.main_image
+                if not display_image:
+                    display_image = getattr(self.shared_data, 'ragnarstatusimage', None)
+
+                throughput = traffic_data.get('throughput_mbps', 0.0)
+                pkts_sec = traffic_data.get('packets_per_second', 0.0)
+                total_alerts = traffic_data.get('total_alerts', 0)
+                unique_hosts = traffic_data.get('unique_hosts', 0)
+                connections = traffic_data.get('active_connections', 0)
+                last_speed = getattr(self.shared_data, 'last_speed_test_mbps', 0.0)
+                last_speed_time = getattr(self.shared_data, 'last_speed_test_time', None)
+                last_speed_status = getattr(self.shared_data, 'last_speed_test_status', 'never')
+                top_hosts = []
+                analyzer = getattr(self.shared_data, '_traffic_analyzer', None)
+                if analyzer is not None:
                     try:
-                        bat_level = _ps.get_battery_level()
-                        if bat_level is not None:
-                            bat_level = int(round(bat_level))
-                            charging = _ps.is_charging()
-                            bat_text = f"{bat_level}%+" if charging else f"{bat_level}%"
-                            bbox = self.shared_data.font_arial9.getbbox(bat_text)
-                            text_w = bbox[2] - bbox[0]
-                            tx = W - text_w - 1
-                            draw.text((tx, int(10 * sy)),
-                                      bat_text, font=self.shared_data.font_arial9, fill=0)
+                        top_hosts = analyzer.get_top_hosts(limit=1)
                     except Exception:
-                        pass
+                        top_hosts = []
+                top_host = top_hosts[0].get('ip', 'N/A') if top_hosts else 'N/A'
+                current_status = getattr(self.shared_data, 'ragnarorch_status', 'IDLE')
 
-                # Stats — positions scaled to fill the physical width/height,
-                # but icon images stay at their original pixel size.
-                stats = [
-                    (self.shared_data.target,    (int(8 * sx),   int(22 * sy)), (int(28 * sx),  int(22 * sy)), str(self.shared_data.targetnbr)),
-                    (self.shared_data.port,      (int(47 * sx),  int(22 * sy)), (int(67 * sx),  int(22 * sy)), str(self.shared_data.portnbr)),
-                    (self.shared_data.vuln,      (int(86 * sx),  int(22 * sy)), (int(106 * sx), int(22 * sy)), str(self.shared_data.vulnnbr)),
-                    (self.shared_data.cred,      (int(8 * sx),   int(41 * sy)), (int(28 * sx),  int(41 * sy)), str(self.shared_data.crednbr)),
-                    (self.shared_data.money,     (int(3 * sx),   int(172 * sy)), (int(3 * sx),  int(192 * sy)), str(self.shared_data.coinnbr)),
-                    (self.shared_data.level,     (int(2 * sx),   int(217 * sy)), (int(4 * sx),  int(237 * sy)), str(self.shared_data.levelnbr)),
-                    (self.shared_data.zombie,    (int(47 * sx),  int(41 * sy)), (int(67 * sx),  int(41 * sy)), str(self.shared_data.zombiesnbr)),
-                    (self.shared_data.networkkb, (int(102 * sx), int(190 * sy)), (int(102 * sx), int(208 * sy)), str(self.shared_data.networkkbnbr)),
-                    (self.shared_data.data,      (int(86 * sx),  int(41 * sy)), (int(106 * sx), int(41 * sy)), str(self.shared_data.datanbr)),
-                    (self.shared_data.attacks,   (int(100 * sx), int(218 * sy)), (int(102 * sx), int(237 * sy)), str(self.shared_data.attacksnbr)),
+                # Draw the big tracker title and reduced status lines.
+                draw.text((int(6 * sx), int(4 * sy)), display_label, font=self.shared_data.font_arialbold, fill=0)
+
+                # Big Viking image, scaled taller and centered.
+                if display_image is not None:
+                    max_height = int(H * 0.55)
+                    max_width = int(W * 0.9)
+                    scale = min(max_width / display_image.width, max_height / display_image.height)
+                    if scale <= 0:
+                        scale = 1.0
+                    img_w = max(1, int(display_image.width * scale))
+                    img_h = max(1, int(display_image.height * scale))
+                    if img_w != display_image.width or img_h != display_image.height:
+                        try:
+                            display_image = display_image.resize((img_w, img_h), Image.Resampling.LANCZOS)
+                        except Exception:
+                            display_image = display_image.resize((img_w, img_h), Image.NEAREST)
+                    cx = (W - display_image.width) // 2
+                    cy = int(H * 0.16)
+                    image.paste(display_image, (cx, cy))
+                else:
+                    cx = 0
+                    cy = int(H * 0.16)
+
+                speed_label = f"{last_speed:.1f} Mbps" if last_speed and last_speed_status == 'OK' else last_speed_status.title()
+                last_speed_text = last_speed_time
+                if last_speed_time:
+                    try:
+                        last_speed_text = datetime.fromisoformat(last_speed_time).strftime('%H:%M')
+                    except Exception:
+                        last_speed_text = last_speed_time
+
+                metrics = [
+                    ("Throughput", f"{throughput:.1f} Mbps"),
+                    ("Hosts", str(unique_hosts)),
+                    ("Conns", str(connections)),
+                    ("Speed", speed_label),
+                    ("Last", last_speed_text or 'never'),
+                    ("Top", top_host),
                 ]
 
-                for img, img_pos, text_pos, text in stats:
-                    image.paste(img, img_pos)
-                    draw.text(text_pos, text, font=self.shared_data.font_arial9, fill=0)
+                y = H - int(20 * sy) - len(metrics) * int(10 * sy)
+                for label, value in metrics:
+                    draw.text((int(6 * sx), y), f"{label}: {value}", font=self.shared_data.font_arial11, fill=0)
+                    y += int(11 * sy)
 
-                self.shared_data.update_ragnarstatus()
-                image.paste(self.shared_data.ragnarstatusimage, (int(3 * sx), int(60 * sy)))
-                draw.text((int(35 * sx), int(65 * sy)), self.shared_data.ragnarstatustext, font=self.shared_data.font_arial9, fill=0)
-                draw.text((int(35 * sx), int(75 * sy)), self.shared_data.ragnarstatustext2, font=self.shared_data.font_arial9, fill=0)
-
-                # Frise ribbon
-                if self.shared_data.frise is not None:
-                    frise_img = self.shared_data.frise
-                    if frise_img.width != W - 2:
-                        frise_img = frise_img.resize((W - 2, frise_img.height), Image.NEAREST)
-                    image.paste(frise_img, (1, int(160 * sy)))
-
-                # Frame & dividers — span full physical width
+                # Draw a simple border only.
                 draw.rectangle((1, 1, W - 1, H - 1), outline=0)
-                draw.line((1, int(20 * sy), W - 1, int(20 * sy)), fill=0)
-                draw.line((1, int(59 * sy), W - 1, int(59 * sy)), fill=0)
-                draw.line((1, int(87 * sy), W - 1, int(87 * sy)), fill=0)
-
-                lines = self.shared_data.wrap_text(self.shared_data.ragnarsays, self.shared_data.font_arialbold, W - 4)
-                y_text = int(90 * sy)
-
-                # Character image — centred on the full canvas
-                if self.main_image is not None:
-                    cx = (W - self.main_image.width) // 2
-                    cy = H - self.main_image.height
-                    image.paste(self.main_image, (cx, cy))
-                else:
-                    logger.error("Main image not found in shared_data.")
-
-                for line in lines:
-                    draw.text((int(4 * sx), y_text), line, font=self.shared_data.font_arialbold, fill=0)
-                    y_text += (self.shared_data.font_arialbold.getbbox(line)[3] - self.shared_data.font_arialbold.getbbox(line)[1]) + 3
 
                 if self.screen_reversed and self.screen_reversed in _ROTATION_TRANSPOSE:
                     epd_img = _apply_epd_rotation(image, self.screen_reversed)

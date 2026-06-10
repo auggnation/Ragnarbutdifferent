@@ -162,7 +162,7 @@
 
 ### 8.3 AP Mode Lifecycle
 - Activates when Wi-Fi is unavailable and `wifi_auto_ap_fallback` is true or when forced via `/api/wifi/ap-mode`. Relies on `hostapd` + `dnsmasq`; `wifi_manager.py` writes fresh `/tmp/ragnar/hostapd.conf` and `/tmp/ragnar/dnsmasq.conf` files on every AP start instead of loading templates from `resources/`.
-- Configurable SSID/password (`wifi_ap_ssid`, `wifi_ap_password`), default `Ragnar`/`ragnarconnect`. Channel default 6, can be changed via config.
+- Configurable SSID/password (`wifi_ap_ssid`, `wifi_ap_password`), default `RAGNAR WIFI`/`ragnarThe Viking`. Channel default 6, can be changed via config.
 - Serves captive portal at `http://192.168.4.1/portal` (assets under `web/`). Portal surfaces known networks, RSSI, manual SSID entry, countdown timers, and AP-client analytics.
 - AP logger writes to `/var/log/ap.log` or `data/logs/ap.log` fallback; logs include AP start/stop, client associations, portal submissions, and forced exits.
 - Idle timeout (`ap_mode_timeout`, default 180 s) cycles between AP and Wi-Fi reconnect attempts; user interactions extend timers and mark `ap_clients_connected=True` to prevent premature shutdown.
