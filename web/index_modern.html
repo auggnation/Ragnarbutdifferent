@@ -4018,7 +4018,7 @@
                         <span id="wd-map-signal-val" class="text-xs text-gray-300">-100 dBm</span>
                         <div class="ml-auto flex items-center gap-2">
                             <!-- Hidden unless GPS backfill is enabled in Config → Wardriving -->
-                            <button onclick="backfillWardrivingGps()" id="wd-map-backfill-btn" title="Estimate positions for networks scanned during GPS dropouts by interpolating from the recorded GPS track. Not allowed in WDGWARS — backfilled rows are excluded from WiGLE export."
+                            <button onclick="backfillWardrivingGps()" id="wd-map-backfill-btn" title="Estimate positions for networks scanned during GPS dropouts by interpolating from the recorded GPS track. These are estimates, not measurements — backfilled rows are excluded from WiGLE export."
                                 class="hidden bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded px-2 py-1 border border-emerald-800 flex items-center gap-1">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -4335,7 +4335,7 @@
                             </div>
                             <div class="flex items-start gap-2 text-xs text-amber-400 bg-amber-900/20 rounded px-2 py-2">
                                 <svg class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
-                                <span>Backfill GPS is <strong>not allowed in WDGWARS</strong>. WiGLE export will be disabled for any data that has been backfilled.</span>
+                                <span>Backfilled positions are <strong>estimated, not measured</strong>. This app excludes them from WiGLE export to avoid submitting interpolated coordinates as real observations.</span>
                             </div>
                         </div>
 

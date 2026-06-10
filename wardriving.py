@@ -978,8 +978,8 @@ class WardrivingSession:
         """Export session to WiGLE CSV format string including WiFi, BT, and cell.
 
         Rows whose position was estimated via backfill_gps_from_track
-        (gps_backfilled = 1) are excluded — interpolated coordinates are not
-        permitted in WiGLE submissions (WDGWARS rules)."""
+        (gps_backfilled = 1) are excluded — they are interpolated coordinates,
+        not real observations, and must not be submitted to WiGLE."""
         lines = []
         dn = device_name or 'Ragnar'
         lines.append(f'WigleWifi-1.4,appRelease=Ragnar,model=RaspberryPi,release=1.0,device={dn},display=EPD,board=RPi,brand=Ragnar')

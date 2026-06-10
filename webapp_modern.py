@@ -6916,13 +6916,15 @@ def wardriving_backfill_gps():
     timestamp. Covers brief GPS dropouts and the warm-up window before TTFF.
 
     Gated behind the `wardriving_allow_backfill` config flag (off by default):
-    backfilled positions are estimates, not allowed in WDGWARS, and are
-    excluded from WiGLE export once written."""
+    backfilled positions are estimated, not measured, and are excluded from
+    WiGLE export once written so interpolated coordinates aren't submitted as
+    real observations."""
     try:
         if not shared_data.config.get('wardriving_allow_backfill', False):
             return jsonify({
                 'error': 'GPS backfill is disabled. Enable it in Config → Wardriving. '
-                         'Backfill is not allowed in WDGWARS and backfilled rows are excluded from WiGLE export.'
+                         'Backfilled positions are estimated, not measured, and are excluded '
+                         'from WiGLE export to avoid submitting interpolated coordinates as real observations.'
             }), 403
         engine = _get_wardriving_engine()
         body = request.get_json(silent=True) or {}
