@@ -33,8 +33,14 @@ check_root() {
 }
 
 check_python_package() {
-    python3 -c "import $1" 2>/dev/null
-    return $?
+    local venv_py="/home/ragnar/Ragnar/ragnar-venv/bin/python3"
+    if [ -x "$venv_py" ]; then
+        "$venv_py" -c "import $1" 2>/dev/null
+        return $?
+    else
+        python3 -c "import $1" 2>/dev/null
+        return $?
+    fi
 }
 
 install_system_packages() {
@@ -65,6 +71,7 @@ install_system_packages() {
         "zlib1g-dev"
         "libpng-dev"
         "python3-dev"
+        "libcap-dev"
         "libffi-dev"
         "libssl-dev"
         "libgpiod-dev"
@@ -158,21 +165,47 @@ install_python_packages() {
     
     configure_piwheels
     
-    # Install RPi.GPIO and spidev
+    # Create and prepare a virtual environment for Ragnar
+    VENV_DIR="/home/ragnar/Ragnar/ragnar-venv"
+    VENV_PY=""
+    VENV_PIP=""
+    venv_create() {
+        if [ ! -d "$VENV_DIR" ]; then
+            log "INFO" "Creating virtualenv at $VENV_DIR"
+            if ! python3 -m venv "$VENV_DIR"; then
+                log "ERROR" "Failed to create virtualenv at $VENV_DIR"
+                return 1
+            fi
+        fi
+        VENV_PY="$VENV_DIR/bin/python3"
+        VENV_PIP="$VENV_DIR/bin/pip"
+        log "INFO" "Upgrading pip/setuptools/wheel in venv"
+        if ! "$VENV_PY" -m pip install --upgrade pip setuptools wheel; then
+            log "WARNING" "Failed to upgrade pip in venv"
+        fi
+        return 0
+    }
+    
+    if ! venv_create; then
+        log "ERROR" "Virtualenv creation failed"
+        return 1
+    fi
+    
+    # Install RPi.GPIO and spidev into the venv
     if ! check_python_package "RPi.GPIO"; then
-        log "INFO" "Installing RPi.GPIO and spidev..."
-        if ! pip3 install --break-system-packages RPi.GPIO==0.7.1 spidev==3.5; then
+        log "INFO" "Installing RPi.GPIO and spidev into venv..."
+        if ! "$VENV_PIP" install --break-system-packages RPi.GPIO==0.7.1 spidev==3.5; then
             log "WARNING" "Failed to install RPi.GPIO/spidev with version pinning, trying without..."
-            pip3 install --break-system-packages RPi.GPIO spidev || log "ERROR" "Failed to install RPi.GPIO/spidev"
+            "$VENV_PIP" install --break-system-packages RPi.GPIO spidev || log "ERROR" "Failed to install RPi.GPIO/spidev"
         fi
     else
-        log "SUCCESS" "RPi.GPIO already installed"
+        log "SUCCESS" "RPi.GPIO already installed in system or venv"
     fi
     
     # Install Pillow
     if ! check_python_package "PIL"; then
-        log "INFO" "Installing Pillow..."
-        if ! pip3 install --break-system-packages "Pillow>=10.0.0"; then
+        log "INFO" "Installing Pillow into venv..."
+        if ! "$VENV_PIP" install --break-system-packages "Pillow>=10.0.0"; then
             log "WARNING" "Pillow pip install failed, using system package python3-pil"
             apt-get install -y python3-pil
         fi
@@ -182,8 +215,8 @@ install_python_packages() {
     
     # Install numpy and pandas
     if ! check_python_package "numpy" || ! check_python_package "pandas"; then
-        log "INFO" "Installing numpy and pandas (this may take a while)..."
-        if ! pip3 install --break-system-packages --retries 5 --timeout 300 "numpy>=1.24.0" "pandas>=2.0.0"; then
+        log "INFO" "Installing numpy and pandas into venv (this may take a while)..."
+        if ! "$VENV_PIP" install --break-system-packages --retries 5 --timeout 300 "numpy>=1.24.0" "pandas>=2.0.0"; then
             log "WARNING" "Pandas/numpy pip install failed, relying on system packages"
         fi
     else
@@ -214,14 +247,22 @@ install_python_packages() {
         if check_python_package "$import_name"; then
             log "SUCCESS" "$package already installed"
         else
-            log "INFO" "Installing $package..."
-            if ! pip3 install --break-system-packages --retries 3 --timeout 180 "$package"; then
+            log "INFO" "Installing $package into venv..."
+            if ! "$VENV_PIP" install --break-system-packages --retries 3 --timeout 180 "$package"; then
                 log "ERROR" "Failed to install $package after retries"
                 return 1
             fi
             log "SUCCESS" "Installed $package"
         fi
     done
+
+    # Attempt to install pisugar but skip if not available for this Python
+    log "INFO" "Attempting optional install: pisugar (may not support newer Python versions)"
+    if ! "$VENV_PIP" install --break-system-packages "pisugar>=1.0.0" 2>/dev/null; then
+        log "WARNING" "pisugar not available for this Python version; skipping optional pisugar installation"
+    else
+        log "SUCCESS" "pisugar installed into venv"
+    fi
     
     log "SUCCESS" "Python packages installation completed"
 }
@@ -242,13 +283,23 @@ install_waveshare_epd() {
         git sparse-checkout set RaspberryPi_JetsonNano
         cd RaspberryPi_JetsonNano/python
         
-        log "INFO" "Installing e-Paper Python package..."
-        if pip3 install . --break-system-packages; then
-            log "SUCCESS" "Installed Waveshare e-Paper library"
+        log "INFO" "Installing e-Paper Python package into venv..."
+        if [ -n "$VENV_PIP" ]; then
+            if "$VENV_PIP" install . --break-system-packages; then
+                log "SUCCESS" "Installed Waveshare e-Paper library into venv"
+            else
+                log "ERROR" "Failed to install Waveshare e-Paper library into venv"
+                cd "$current_dir"
+                return 1
+            fi
         else
-            log "ERROR" "Failed to install Waveshare e-Paper library"
-            cd "$current_dir"
-            return 1
+            if pip3 install . --break-system-packages; then
+                log "SUCCESS" "Installed Waveshare e-Paper library"
+            else
+                log "ERROR" "Failed to install Waveshare e-Paper library"
+                cd "$current_dir"
+                return 1
+            fi
         fi
     else
         log "ERROR" "Failed to clone Waveshare e-Paper repository"

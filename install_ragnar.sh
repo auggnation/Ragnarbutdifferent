@@ -1430,48 +1430,9 @@ clean_exit() {
     exit $exit_code
 }
 
-# Display the installation menu with banner
-show_install_menu() {
-    local is_pi=$1
-    clear
-    echo ""
-    echo -e "${GREEN}"
-    cat << 'BANNER'
-    ____
-   |  _ \ __ _  __ _ _ __   __ _ _ __
-   | |_) / _` |/ _` | '_ \ / _` | '__|
-   |  _ < (_| | (_| | | | | (_| | |
-   |_| \_\__,_|\__, |_| |_|\__,_|_|
-                |___/
-BANNER
-    echo -e "${NC}"
-    echo -e "${CYAN}  ══════════════════════════════════════════════════════════${NC}"
-    echo -e "${WHITE}     Network Security & Pentesting Toolkit                ${NC}"
-    echo -e "${GREEN}     Created by Pierre Gode                               ${NC}"
-    echo -e "${CYAN}  ──────────────────────────────────────────────────────────${NC}"
-    echo -e "${RED}     For authorized penetration testing only.              ${NC}"
-    echo -e "${RED}     Unauthorized access to networks is illegal.           ${NC}"
-    echo -e "${CYAN}  ══════════════════════════════════════════════════════════${NC}"
-    echo ""
-    echo -e "${BLUE}   Select installation profile:${NC}"
-    echo ""
-    if [ "$is_pi" = true ]; then
-        echo -e "   ${CYAN}*${YELLOW} 1)${CYAN} Raspberry Pi with e-Paper display              ${NC}"
-        echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} Raspberry Pi with TFT LCD display              ${NC}"
-        echo -e "   ${CYAN}*${YELLOW} 3)${CYAN} Server install with display                    ${NC}"
-        echo -e "   ${CYAN}*${YELLOW} 4)${CYAN} Server install (headless, no display)           ${NC}"
-        echo -e "   ${CYAN}*${YELLOW} 5)${CYAN} WiFi Pineapple Pager ${RED}(beta)                    ${NC}"
-    else
-        echo -e "   ${CYAN}*${YELLOW} 1)${CYAN} Server install with display                    ${NC}"
-        echo -e "   ${CYAN}*${YELLOW} 2)${CYAN} Server install (headless, no display)           ${NC}"
-        echo -e "   ${CYAN}*${YELLOW} 3)${CYAN} WiFi Pineapple Pager                            ${NC}"
-    fi
-    echo ""
-    echo -e "${CYAN}  ══════════════════════════════════════════════════════════${NC}"
-    echo -e "   Enter your choice or ${RED}ctrl+c${NC} to exit."
-    echo ""
-    echo -ne "   ${YELLOW}> ${NC}"
-}
+# Single install profile: minimal, non-interactive network-monitor device
+# The project is now a network monitoring device; default to the standard
+# device install (EPD enabled, non-TFT). No interactive menu presented.
 
 # Main installation process
 main() {
