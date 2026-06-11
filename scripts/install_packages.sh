@@ -160,6 +160,11 @@ configure_piwheels() {
     fi
 }
 
+# When running as root, suppress pip's root-user warning by passing
+# the recommended flag to pip invocations in this installer.
+PIP_ROOT_FLAG="--root-user-action=ignore"
+PIP_COMMON_FLAGS="--break-system-packages ${PIP_ROOT_FLAG}"
+
 install_python_packages() {
     log "INFO" "Installing Python packages..."
     
@@ -180,7 +185,7 @@ install_python_packages() {
         VENV_PY="$VENV_DIR/bin/python3"
         VENV_PIP="$VENV_DIR/bin/pip"
         log "INFO" "Upgrading pip/setuptools/wheel in venv"
-        if ! "$VENV_PY" -m pip install --upgrade pip setuptools wheel; then
+        if ! "$VENV_PY" -m pip install --upgrade pip setuptools wheel ${PIP_ROOT_FLAG}; then
             log "WARNING" "Failed to upgrade pip in venv"
         fi
         return 0
@@ -194,9 +199,9 @@ install_python_packages() {
     # Install RPi.GPIO and spidev into the venv
     if ! check_python_package "RPi.GPIO"; then
         log "INFO" "Installing RPi.GPIO and spidev into venv..."
-        if ! "$VENV_PIP" install --break-system-packages RPi.GPIO==0.7.1 spidev==3.5; then
+        if ! "$VENV_PIP" install ${PIP_COMMON_FLAGS} RPi.GPIO==0.7.1 spidev==3.5; then
             log "WARNING" "Failed to install RPi.GPIO/spidev with version pinning, trying without..."
-            "$VENV_PIP" install --break-system-packages RPi.GPIO spidev || log "ERROR" "Failed to install RPi.GPIO/spidev"
+            "$VENV_PIP" install ${PIP_COMMON_FLAGS} RPi.GPIO spidev || log "ERROR" "Failed to install RPi.GPIO/spidev"
         fi
     else
         log "SUCCESS" "RPi.GPIO already installed in system or venv"
@@ -205,7 +210,7 @@ install_python_packages() {
     # Install Pillow
     if ! check_python_package "PIL"; then
         log "INFO" "Installing Pillow into venv..."
-        if ! "$VENV_PIP" install --break-system-packages "Pillow>=10.0.0"; then
+        if ! "$VENV_PIP" install ${PIP_COMMON_FLAGS} "Pillow>=10.0.0"; then
             log "WARNING" "Pillow pip install failed, using system package python3-pil"
             apt-get install -y python3-pil
         fi
@@ -216,7 +221,7 @@ install_python_packages() {
     # Install numpy and pandas
     if ! check_python_package "numpy" || ! check_python_package "pandas"; then
         log "INFO" "Installing numpy and pandas into venv (this may take a while)..."
-        if ! "$VENV_PIP" install --break-system-packages --retries 5 --timeout 300 "numpy>=1.24.0" "pandas>=2.0.0"; then
+        if ! "$VENV_PIP" install ${PIP_COMMON_FLAGS} --retries 5 --timeout 300 "numpy>=1.24.0" "pandas>=2.0.0"; then
             log "WARNING" "Pandas/numpy pip install failed, relying on system packages"
         fi
     else
@@ -248,7 +253,7 @@ install_python_packages() {
             log "SUCCESS" "$package already installed"
         else
             log "INFO" "Installing $package into venv..."
-            if ! "$VENV_PIP" install --break-system-packages --retries 3 --timeout 180 "$package"; then
+            if ! "$VENV_PIP" install ${PIP_COMMON_FLAGS} --retries 3 --timeout 180 "$package"; then
                 log "ERROR" "Failed to install $package after retries"
                 return 1
             fi
@@ -258,7 +263,7 @@ install_python_packages() {
 
     # Attempt to install pisugar but skip if not available for this Python
     log "INFO" "Attempting optional install: pisugar (may not support newer Python versions)"
-    if ! "$VENV_PIP" install --break-system-packages "pisugar>=1.0.0" 2>/dev/null; then
+    if ! "$VENV_PIP" install ${PIP_COMMON_FLAGS} "pisugar>=1.0.0" 2>/dev/null; then
         log "WARNING" "pisugar not available for this Python version; skipping optional pisugar installation"
     else
         log "SUCCESS" "pisugar installed into venv"
@@ -285,7 +290,7 @@ install_waveshare_epd() {
         
         log "INFO" "Installing e-Paper Python package into venv..."
         if [ -n "$VENV_PIP" ]; then
-            if "$VENV_PIP" install . --break-system-packages; then
+            if "$VENV_PIP" install ${PIP_COMMON_FLAGS} .; then
                 log "SUCCESS" "Installed Waveshare e-Paper library into venv"
             else
                 log "ERROR" "Failed to install Waveshare e-Paper library into venv"
@@ -293,7 +298,7 @@ install_waveshare_epd() {
                 return 1
             fi
         else
-            if pip3 install . --break-system-packages; then
+            if pip3 install ${PIP_COMMON_FLAGS} .; then
                 log "SUCCESS" "Installed Waveshare e-Paper library"
             else
                 log "ERROR" "Failed to install Waveshare e-Paper library"
