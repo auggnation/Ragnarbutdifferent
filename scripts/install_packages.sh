@@ -261,14 +261,6 @@ install_python_packages() {
         fi
     done
 
-    # Attempt to install pisugar but skip if not available for this Python
-    log "INFO" "Attempting optional install: pisugar (may not support newer Python versions)"
-    if ! "$VENV_PIP" install ${PIP_COMMON_FLAGS} "pisugar>=1.0.0" 2>/dev/null; then
-        log "WARNING" "pisugar not available for this Python version; skipping optional pisugar installation"
-    else
-        log "SUCCESS" "pisugar installed into venv"
-    fi
-    
     log "SUCCESS" "Python packages installation completed"
 }
 

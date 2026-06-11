@@ -737,6 +737,8 @@ class SharedData:
             "pwnagotchi_last_switch": "",
             "pwnagotchi_last_status": "Not installed",
 
+            "traffic_only": False,
+
             "__title_wardriving__": "Wardriving",
             "wardriving_enabled": False,
             "wardriving_display": False,

@@ -58,12 +58,8 @@ class Ragnar:
         self._web_thread_ref = None  # Reference to current web server thread
 
         # PiSugar button listener (for Ragnar/Pwnagotchi swap via hardware button)
+        # PiSugar support removed: runtime listener disabled by default
         self.pisugar_listener = None
-        try:
-            from pisugar_button import PiSugarButtonListener
-            self.pisugar_listener = PiSugarButtonListener(shared_data)
-        except ImportError:
-            pass
 
     def run(self):
         """Main loop for Ragnar. Waits for Wi-Fi connection and starts Orchestrator."""
@@ -71,9 +67,7 @@ class Ragnar:
         logger.info("RAGNAR MAIN THREAD STARTING")
         logger.info("=" * 70)
         
-        # Start PiSugar button listener (if available)
-        if self.pisugar_listener:
-            self.pisugar_listener.start()
+        # PiSugar listener intentionally disabled in traffic/dashboard build
 
         # If wardriving-on-boot is enabled, kick wardriving off BEFORE the WiFi
         # manager starts. wifi_manager.start() blocks ~5s minimum (longer with
@@ -119,6 +113,11 @@ class Ragnar:
 
     def check_and_start_orchestrator(self):
         """Check Wi-Fi and start the orchestrator if connected."""
+        # If running in traffic-only mode, do not start the orchestrator
+        if self.shared_data.config.get('traffic_only', False):
+            logger.info("Traffic-only mode enabled: skipping orchestrator startup")
+            return
+
         wifi_connected = self.wifi_manager.check_wifi_connection()
         logger.debug(f"WiFi connection check: {wifi_connected}")
         
@@ -230,9 +229,6 @@ class Ragnar:
         """Stop Ragnar and cleanup all resources."""
         logger.info("Stopping Ragnar...")
 
-        # Stop PiSugar listener
-        if self.pisugar_listener:
-            self.pisugar_listener.stop()
 
         # Stop orchestrator
         self.stop_orchestrator()

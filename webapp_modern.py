@@ -3334,6 +3334,38 @@ def get_status():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/dashboard')
+def get_dashboard():
+    """Simplified network-only dashboard payload for traffic-only mode."""
+    try:
+        wifi_status = _get_wifi_manager_status()
+        ethernet_ip = _get_active_ethernet_ip()
+        wifi_ip = safe_str(wifi_status.get('wifi_ip', ''))
+        ap_ip = safe_str(wifi_status.get('ap_ip', ''))
+        current_ip = ethernet_ip or wifi_ip or ap_ip or ''
+
+        data = {
+            'wifi_connected': wifi_status.get('wifi_connected', safe_bool(shared_data.wifi_connected)),
+            'current_ssid': safe_str(wifi_status.get('current_ssid') or get_current_wifi_ssid()),
+            'wifi_ip': wifi_ip,
+            'ap_ip': ap_ip,
+            'ap_mode_active': safe_bool(wifi_status.get('ap_mode_active', False)),
+            'ap_ssid': safe_str(wifi_status.get('ap_ssid', '')),
+            'ap_clients_count': safe_int(wifi_status.get('ap_clients_count', 0)),
+            'scanned_network_count': safe_int(getattr(shared_data, 'scanned_networks_count', 0)),
+            'ethernet_connected': safe_bool(is_ethernet_available()),
+            'ethernet_ip': ethernet_ip,
+            'current_ip': current_ip,
+            'timestamp': datetime.now().isoformat()
+        }
+        response = jsonify(data)
+        response.headers['Cache-Control'] = 'public, max-age=2'
+        return response
+    except Exception as e:
+        logger.error(f"Error getting dashboard: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/config', methods=['GET'])
 def get_config():
     """Get current configuration"""
@@ -12702,12 +12734,12 @@ def get_current_status():
             wifi_status = wifi_manager.wifi_manager.get_status()
     except Exception as e:
         logger.debug(f"Could not get WiFi status from manager: {e}")
+    ethernet_ip = _get_active_ethernet_ip()
+    wifi_ip = safe_str(wifi_status.get('wifi_ip', ''))
+    ap_ip = safe_str(wifi_status.get('ap_ip', ''))
+    current_ip = ethernet_ip or wifi_ip or ap_ip or ''
 
-ethernet_ip = _get_active_ethernet_ip()
-        wifi_ip = safe_str(wifi_status.get('wifi_ip', ''))
-        ap_ip = safe_str(wifi_status.get('ap_ip', ''))
-        current_ip = ethernet_ip or wifi_ip or ap_ip or ''
-        return {
+    return {
         'ragnar_status': safe_str(shared_data.ragnarstatustext),
         'ragnar_status2': safe_str(shared_data.ragnarstatustext2),
         'ragnar_says': safe_str(shared_data.ragnarsays),
