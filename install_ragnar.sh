@@ -353,14 +353,7 @@ check_system_compatibility() {
     log "INFO" "Architecture detected: ${architecture} (proceeding without compatibility warnings)"
 
     if [ "$should_ask_confirmation" = true ]; then
-        echo -e "\n${YELLOW}Some system compatibility warnings were detected (see above).${NC}"
-        echo -e "${YELLOW}The installation might not work as expected.${NC}"
-        echo -e "${YELLOW}Do you want to continue anyway? (y/n)${NC}"
-        read -r response
-        if [[ ! "$response" =~ ^[Yy]$ ]]; then
-            log "INFO" "Installation aborted by user after compatibility warnings"
-            clean_exit 1
-        fi
+        log "WARNING" "Compatibility warnings detected; continuing non-interactively (installation may be affected)"
     else
         log "SUCCESS" "All compatibility checks passed"
     fi
@@ -385,23 +378,8 @@ check_internet() {
         fi
         return 0
     else
-        log "WARNING" "No internet connectivity detected!"
-        echo -e "${YELLOW}Internet connection is required to download Python packages.${NC}"
-        echo -e "${YELLOW}Please check your network connection and try again.${NC}"
-        echo -e "\nDo you want to:"
-        echo "1. Continue anyway (installation may fail)"
-        echo "2. Exit and fix network issues first (recommended)"
-        read -r choice
-        case $choice in
-            1) 
-                log "WARNING" "Continuing without verified internet connection"
-                return 0
-                ;;
-            *)
-                log "INFO" "Installation aborted - please fix network issues first"
-                clean_exit 1
-                ;;
-        esac
+        log "WARNING" "No internet connectivity detected! Proceeding in non-interactive mode (installation may fail)"
+        return 0
     fi
 }
 
@@ -686,64 +664,10 @@ setup_ragnar() {
     local machine_arch
     machine_arch=$(uname -m 2>/dev/null || echo "")
     if [[ "$machine_arch" == "armv7l" || "$machine_arch" == "armv6l" || "$machine_arch" == "aarch64" || "$machine_arch" == "arm64" ]]; then
-        if [ -z "${PIP_EXTRA_INDEX_URL:-}" ]; then
-            export PIP_EXTRA_INDEX_URL="https://www.piwheels.org/simple"
-        else
-            export PIP_EXTRA_INDEX_URL="$PIP_EXTRA_INDEX_URL https://www.piwheels.org/simple"
+        if [ -z "$EPD_VERSION" ]; then
+            log "INFO" "No interactive display selection - defaulting to epd2in7_V2 (2.7\" e-Paper)"
+            EPD_VERSION="epd2in7_V2"
         fi
-        log "INFO" "Using PiWheels Python package index for ${machine_arch}"
-    fi
-
-    # Create ragnar user if it doesn't exist
-    if ! id -u $ragnar_USER >/dev/null 2>&1; then
-        adduser --disabled-password --gecos "" $ragnar_USER
-        check_success "Created ragnar user"
-    fi
-
-    # Check for existing ragnar directory with a valid git clone
-    cd /home/$ragnar_USER
-    if [ -d "Ragnar/.git" ] || [ -d "Ragnar/actions" ]; then
-        log "INFO" "Using existing ragnar directory"
-        echo -e "${GREEN}Using existing ragnar directory${NC}"
-    else
-        # Remove empty/invalid directory if it exists
-        if [ -d "Ragnar" ]; then
-            log "WARNING" "Ragnar directory exists but is not a valid clone, removing..."
-            rm -rf Ragnar
-        fi
-        # Proceed with clone (falls back to wget tarball if git is broken)
-        log "INFO" "Cloning ragnar repository"
-        if ! clone_or_download https://github.com/auggnation/Ragnarbutdifferent.git Ragnar main; then
-            log "ERROR" "Cannot obtain Ragnar repository — installation cannot continue"
-            log "ERROR" "If git crashes with 'Illegal instruction', your git binary may be"
-            log "ERROR" "compiled for a newer ARM architecture. Try: sudo apt reinstall git"
-            log "ERROR" "or download manually: wget https://github.com/auggnation/Ragnarbutdifferent/archive/refs/heads/main.tar.gz"
-            clean_exit 1
-        fi
-    fi
-
-    cd Ragnar
-
-    # Update the default display type in shared.py with the detected/selected version
-    log "INFO" "Updating display default configuration in shared.py..."
-    if [ -z "${EPD_VERSION:-}" ]; then
-        if [ "$HEADLESS_MODE" = true ]; then
-            log "INFO" "Headless mode selected - skipping shared.py default display configuration"
-        else
-            log "WARNING" "Display version not detected - skipping shared.py update"
-        fi
-    elif [ -f "$ragnar_PATH/shared.py" ]; then
-        # Replace whatever epd_type default is currently in shared.py with the user's selection.
-        # Using a wildcard pattern instead of hardcoding "epd2in13_V4" so this works correctly
-        # on reinstalls where a previous run already changed the default to a different version.
-        sed -i "s/\"epd_type\": \"[^\"]*\"/\"epd_type\": \"$EPD_VERSION\"/" "$ragnar_PATH/shared.py"
-        check_success "Updated shared.py default EPD configuration to $EPD_VERSION"
-        log "INFO" "Modified: $ragnar_PATH/shared.py"
-
-        # Always write the selected epd_type into shared_config.json so the running service
-        # uses the right driver immediately — even on a fresh install where the file doesn't
-        # exist yet (previous code skipped this, leaving Ragnar to regenerate config from
-        # shared.py defaults, which could be stale if sed failed for any reason).
         local config_json="$ragnar_PATH/config/shared_config.json"
         mkdir -p "$(dirname "$config_json")"
         python3 -c "
@@ -1452,133 +1376,14 @@ main() {
         exit 1
     fi
 
-    local is_pi=false
-    if grep -qi "Raspberry Pi" /proc/cpuinfo 2>/dev/null; then
-        is_pi=true
-    fi
-
-    # Display menu and handle selection (loops on invalid input)
-    local profile_choice=""
-    while true; do
-        show_install_menu "$is_pi"
-        read -r profile_choice
-
-        if [ "$is_pi" = true ]; then
-            case $profile_choice in
-                1)
-                    SERVER_INSTALL=false
-                    HEADLESS_MODE=false
-                    TFT_MODE=false
-                    HEADLESS_VARIANT=""
-                    HEADLESS_VARIANT_LABEL=""
-                    RAGNAR_ENTRYPOINT="Ragnar.py"
-                    log "INFO" "Raspberry Pi with e-Paper installation selected"
-                    break
-                    ;;
-                2)
-                    SERVER_INSTALL=false
-                    HEADLESS_MODE=false
-                    TFT_MODE=true
-                    HEADLESS_VARIANT=""
-                    HEADLESS_VARIANT_LABEL=""
-                    RAGNAR_ENTRYPOINT="Ragnar.py"
-                    log "INFO" "Raspberry Pi with TFT LCD installation selected"
-                    break
-                    ;;
-                3)
-                    SERVER_INSTALL=true
-                    HEADLESS_MODE=false
-                    TFT_MODE=false
-                    HEADLESS_VARIANT=""
-                    HEADLESS_VARIANT_LABEL="Server install with display"
-                    RAGNAR_ENTRYPOINT="Ragnar.py"
-                    log "INFO" "Server install with display selected on Raspberry Pi hardware"
-                    break
-                    ;;
-                4)
-                    SERVER_INSTALL=true
-                    HEADLESS_MODE=true
-                    TFT_MODE=false
-                    HEADLESS_VARIANT="server"
-                    HEADLESS_VARIANT_LABEL="Server install"
-                    RAGNAR_ENTRYPOINT="headlessRagnar.py"
-                    log "INFO" "Server install (headless) selected on Raspberry Pi hardware"
-                    break
-                    ;;
-                5)
-                    log "INFO" "WiFi Pineapple Pager installation selected"
-                    echo ""
-                    echo -e "${BLUE}   This will package and deploy Ragnar to your Pineapple Pager.${NC}"
-                    echo -e "${YELLOW}   Make sure your Pager is connected and accessible via SSH.${NC}"
-                    echo ""
-                    read -p "   Enter Pager IP address [172.16.42.1]: " pager_ip
-                    pager_ip="${pager_ip:-172.16.42.1}"
-
-                    pager_exit_code=0
-                    if [ -f "$ragnar_PATH/scripts/install_pineapple_pager.sh" ]; then
-                        chmod +x "$ragnar_PATH/scripts/install_pineapple_pager.sh"
-                        bash "$ragnar_PATH/scripts/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
-                    elif [ -f "$(dirname "$0")/scripts/install_pineapple_pager.sh" ]; then
-                        chmod +x "$(dirname "$0")/scripts/install_pineapple_pager.sh"
-                        bash "$(dirname "$0")/scripts/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
-                    else
-                        log "ERROR" "install_pineapple_pager.sh not found"
-                        log "INFO" "Run it directly: ./scripts/install_pineapple_pager.sh $pager_ip"
-                        pager_exit_code=1
-                    fi
-                    clean_exit $pager_exit_code
-                    ;;
-                *)
-                    echo -e "\n   ${RED}Invalid option. Please select 1, 2, 3, 4, or 5.${NC}"
-                    sleep 1
-                    ;;
-            esac
-        else
-            case $profile_choice in
-                1)
-                    SERVER_INSTALL=true
-                    HEADLESS_MODE=false
-                    HEADLESS_VARIANT=""
-                    HEADLESS_VARIANT_LABEL="Server install with e-Paper"
-                    RAGNAR_ENTRYPOINT="Ragnar.py"
-                    log "INFO" "Server install with e-Paper selected"
-                    break
-                    ;;
-                2)
-                    SERVER_INSTALL=true
-                    HEADLESS_MODE=true
-                    HEADLESS_VARIANT="server"
-                    HEADLESS_VARIANT_LABEL="Server install"
-                    RAGNAR_ENTRYPOINT="headlessRagnar.py"
-                    log "INFO" "Server install (headless) profile selected"
-                    break
-                    ;;
-                3)
-                    log "INFO" "WiFi Pineapple Pager installation selected"
-                    echo ""
-                    echo -e "${BLUE}   This will package and deploy Ragnar to your Pineapple Pager.${NC}"
-                    echo -e "${YELLOW}   Make sure your Pager is connected and accessible via SSH.${NC}"
-                    echo ""
-                    read -p "   Enter Pager IP address [172.16.42.1]: " pager_ip
-                    pager_ip="${pager_ip:-172.16.42.1}"
-
-                    pager_exit_code=0
-                    if [ -f "$(dirname "$0")/scripts/install_pineapple_pager.sh" ]; then
-                        chmod +x "$(dirname "$0")/scripts/install_pineapple_pager.sh"
-                        bash "$(dirname "$0")/scripts/install_pineapple_pager.sh" "$pager_ip" || pager_exit_code=$?
-                    else
-                        log "ERROR" "install_pineapple_pager.sh not found"
-                        pager_exit_code=1
-                    fi
-                    clean_exit $pager_exit_code
-                    ;;
-                *)
-                    echo -e "\n   ${RED}Invalid option. Please select 1, 2, or 3.${NC}"
-                    sleep 1
-                    ;;
-            esac
-        fi
-    done
+    # Non-interactive single-profile install for network monitoring devices
+    # Default: Ragnar with e-Paper display enabled (device mode)
+    SERVER_INSTALL=false
+    HEADLESS_MODE=false
+    TFT_MODE=false
+    HEADLESS_VARIANT=""
+    HEADLESS_VARIANT_LABEL="Device install (network monitor with e-Paper)"
+    RAGNAR_ENTRYPOINT="Ragnar.py"
 
     # Only attempt e-paper setup when not in server/headless profile
     if [ "$HEADLESS_MODE" != true ]; then
