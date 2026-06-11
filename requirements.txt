@@ -21,7 +21,9 @@ logger>=1.4
 pyserial>=3.5
 openai>=2.0.0
 cryptography>=41.0.0
-python-prctl>=1.8.1
+# python-prctl is not compatible with Python 3.13 on this platform.
+# Uncomment only if you have a compatible Python version installed.
+# python-prctl>=1.8.1
 # Optional PiSugar support is installed separately when needed.
 # The pisugar package does not currently publish a compatible wheel for Python 3.13+.
 # pisugar>=1.0.0

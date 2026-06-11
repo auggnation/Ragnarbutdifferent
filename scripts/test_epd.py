@@ -7,6 +7,8 @@ Usage:
 
 It will try common Waveshare modules (epd4in26, epd2in13) and print detailed errors.
 """
+import importlib
+import importlib.util
 import sys
 import time
 from pathlib import Path
@@ -24,6 +26,7 @@ MODULES = [
     ('epd2in13_V2', 'epd2in13_V2'),
 ]
 
+
 def try_import(name):
     for module_prefix in ("waveshare_epd", "resources.waveshare_epd"):
         try:
@@ -32,6 +35,26 @@ def try_import(name):
             return mod
         except Exception as e:
             print(f"Import failed for {module_prefix}.{name}: {e}")
+
+    local_path = ROOT / 'resources' / 'waveshare_epd' / f"{name}.py"
+    if local_path.is_file():
+        try:
+            spec = importlib.util.spec_from_file_location(name, local_path)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[name] = mod
+            spec.loader.exec_module(mod)
+            print(f"Imported local file {local_path}")
+            return mod
+        except Exception as e:
+            print(f"Import failed for local file {local_path}: {e}")
+
+    print('Current PYTHONPATH:')
+    for idx, p in enumerate(sys.path[:10], 1):
+        print(f'  {idx}: {p}')
+    print('resource dir exists:', (ROOT / 'resources').exists())
+    print('waveshare package exists:', (ROOT / 'resources' / 'waveshare_epd').exists())
+    print('waveshare init exists:', (ROOT / 'resources' / 'waveshare_epd' / '__init__.py').exists())
+
     return None
 
 
