@@ -9,6 +9,13 @@ It will try common Waveshare modules (epd4in26, epd2in13) and print detailed err
 """
 import sys
 import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+# Add repo resources path so bundled Waveshare drivers can be imported in this test.
+sys.path.insert(0, str(ROOT / 'resources'))
+sys.path.insert(0, str(ROOT))
+
 from PIL import Image, ImageDraw, ImageFont
 
 MODULES = [
@@ -18,12 +25,14 @@ MODULES = [
 ]
 
 def try_import(name):
-    try:
-        mod = __import__("waveshare_epd." + name, fromlist=['*'])
-        return mod
-    except Exception as e:
-        print(f"Import failed for waveshare_epd.{name}: {e}")
-        return None
+    for module_prefix in ("waveshare_epd", "resources.waveshare_epd"):
+        try:
+            mod = __import__(f"{module_prefix}.{name}", fromlist=['*'])
+            print(f"Imported {module_prefix}.{name}")
+            return mod
+        except Exception as e:
+            print(f"Import failed for {module_prefix}.{name}: {e}")
+    return None
 
 
 def main():
