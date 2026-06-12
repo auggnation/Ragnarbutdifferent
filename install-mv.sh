@@ -38,7 +38,7 @@ header()  { echo -e "\n${CYAN}━━━━━━━━━━━━━━━━�
 [ "$(id -u)" -ne 0 ] && die "Run as root: sudo $0"
 
 # ── Platform detect ───────────────────────────────────────────────
-PKG_MGR="apt"; UPDATE_CMD="apt-get update -y"; INSTALL_CMD="DEBIAN_FRONTEND=noninteractive apt-get install -y -q"
+PKG_MGR="apt"; UPDATE_CMD="apt-get update -y"; INSTALL_CMD="DEBIAN_FRONTEND=noninteractive apt-get install -y"
 IS_ARM=false; ARCH=$(uname -m 2>/dev/null || echo "unknown")
 case "$ARCH" in arm*|aarch64) IS_ARM=true ;; esac
 if [ -f /etc/os-release ]; then
@@ -97,7 +97,7 @@ header "STEP 1 / 7  System packages"
 # ═══════════════════════════════════════════════════════════════════
 
 info "Updating package lists..."
-$UPDATE_CMD >> "$LOG_FILE" 2>&1 || warn "Package update had warnings (continuing)"
+$UPDATE_CMD 2>&1 | tee -a "$LOG_FILE" || warn "Package update had warnings (continuing)"
 
 SYSTEM_PKGS=(
     python3 python3-pip python3-venv python3-dev
@@ -114,12 +114,12 @@ if [ "$IS_ARM" = true ]; then
     SYSTEM_PKGS+=(python3-rpi.gpio python3-spidev raspi-config)
 fi
 
-info "Installing system packages..."
-$INSTALL_CMD "${SYSTEM_PKGS[@]}" >> "$LOG_FILE" 2>&1 || warn "Some packages may not have installed (continuing)"
+warn "Installing system packages — this can take 5-10 minutes on a fresh Pi, please wait..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y "${SYSTEM_PKGS[@]}" 2>&1 | tee -a "$LOG_FILE" || warn "Some packages may not have installed (continuing)"
 
 # AP-mode packages (optional, non-blocking)
-info "Installing AP-mode packages (optional)..."
-$INSTALL_CMD hostapd dnsmasq >> "$LOG_FILE" 2>&1 || warn "hostapd/dnsmasq not installed — AP mode unavailable"
+info "Installing AP-mode packages (optional — may take 1-2 min)..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y hostapd dnsmasq 2>&1 | tee -a "$LOG_FILE" || warn "hostapd/dnsmasq not installed — AP mode unavailable"
 ok "System packages installed"
 
 # ═══════════════════════════════════════════════════════════════════
