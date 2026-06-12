@@ -263,8 +263,19 @@ def api_wifi_connect():
         write = subprocess.run(['sudo', 'tee', wpa_conf],
                                input=new_conf, capture_output=True, text=True, timeout=5)
         if write.returncode == 0:
+            # Reload config then force reassociation with best available network
             subprocess.run(['sudo', 'wpa_cli', '-i', iface, 'reconfigure'],
                            capture_output=True, timeout=10)
+            subprocess.run(['sudo', 'wpa_cli', '-i', iface, 'reassociate'],
+                           capture_output=True, timeout=10)
+            # Renew DHCP lease on new network
+            for dhcp_cmd in (['sudo', 'dhclient', '-r', iface],
+                             ['sudo', 'dhclient', iface],
+                             ['sudo', 'systemctl', 'restart', 'dhcpcd']):
+                try:
+                    subprocess.run(dhcp_cmd, capture_output=True, timeout=8)
+                except Exception:
+                    break
             return jsonify({'status': 'connected', 'ssid': ssid,
                             'note': 'via wpa_supplicant'})
         errors.append('wpa_supplicant write failed')
@@ -334,30 +345,67 @@ def api_wifi_network_delete():
     return jsonify({'status': 'removed'})
 
 
+def _parse_nmcli_terse(line):
+    """Split an nmcli terse line on ':' but treat '\\:' as a literal colon in the value."""
+    parts, cur, i = [], [], 0
+    while i < len(line):
+        if line[i] == '\\' and i + 1 < len(line) and line[i + 1] == ':':
+            cur.append(':'); i += 2
+        elif line[i] == ':':
+            parts.append(''.join(cur)); cur = []; i += 1
+        else:
+            cur.append(line[i]); i += 1
+    parts.append(''.join(cur))
+    return parts
+
+
 @app.route('/api/wifi/scan')
 def api_wifi_scan():
-    """Scan for nearby WiFi networks using nmcli or iwlist."""
-    import subprocess
+    """Scan for nearby WiFi networks. Forces a fresh scan via nmcli, falls back to iwlist."""
+    import subprocess, shutil
     networks = []
-    try:
-        out = subprocess.check_output(
-            ['nmcli', '-t', '-f', 'SSID,SECURITY,SIGNAL', 'dev', 'wifi', 'list'],
-            stderr=subprocess.DEVNULL, timeout=10, text=True
-        )
-        seen = set()
-        for line in out.strip().splitlines():
-            parts = line.split(':', 2)
-            if len(parts) >= 1:
-                ssid = parts[0].strip()
+    seen     = set()
+
+    # ── Method 1: nmcli with forced rescan ───────────────────────────
+    if shutil.which('nmcli'):
+        try:
+            out = subprocess.check_output(
+                ['sudo', 'nmcli', '--rescan', 'yes', '-t', '-e', 'yes',
+                 '-f', 'SSID,SECURITY,SIGNAL', 'device', 'wifi', 'list'],
+                stderr=subprocess.DEVNULL, timeout=15, text=True
+            )
+            for line in out.strip().splitlines():
+                parts = _parse_nmcli_terse(line)
+                ssid  = parts[0].strip() if parts else ''
                 if ssid and ssid not in seen:
                     seen.add(ssid)
                     networks.append({
                         'ssid':     ssid,
                         'security': parts[1].strip() if len(parts) > 1 else '',
-                        'signal':   parts[2].strip() + '%' if len(parts) > 2 else '',
+                        'signal':   (parts[2].strip() + '%') if len(parts) > 2 else '',
                     })
-    except Exception:
-        pass
+        except Exception:
+            pass
+
+    # ── Method 2: iwlist fallback (works even when NM isn't managing the iface) ──
+    if not networks:
+        iface = _get_wifi_iface()
+        try:
+            subprocess.run(['sudo', 'iwlist', iface, 'scan'],
+                           capture_output=True, timeout=12)
+            out = subprocess.check_output(
+                ['sudo', 'iwlist', iface, 'scan'],
+                stderr=subprocess.DEVNULL, timeout=15, text=True
+            )
+            import re as _re
+            for m in _re.finditer(r'ESSID:"([^"]*)"', out):
+                ssid = m.group(1)
+                if ssid and ssid not in seen:
+                    seen.add(ssid)
+                    networks.append({'ssid': ssid, 'security': '', 'signal': ''})
+        except Exception:
+            pass
+
     return jsonify({'networks': networks})
 
 

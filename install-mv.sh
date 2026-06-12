@@ -238,8 +238,11 @@ mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/wpa_passphrase, /usr/bin/wpa_passphras
 mild-viking ALL=(ALL) NOPASSWD: /usr/bin/raspi-config
 mild-viking ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/wpa_supplicant/wpa_supplicant.conf
 mild-viking ALL=(ALL) NOPASSWD: /usr/bin/cat /etc/wpa_supplicant/wpa_supplicant.conf
+mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/iwlist, /usr/bin/iwlist
+mild-viking ALL=(ALL) NOPASSWD: /sbin/dhclient, /usr/sbin/dhclient
 mild-viking ALL=(ALL) NOPASSWD: /usr/bin/timedatectl, /usr/sbin/timedatectl
 mild-viking ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart systemd-timesyncd
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart dhcpcd
 SUDOEOF
 chmod 440 "$SUDOERS_FILE"
 visudo -c -f "$SUDOERS_FILE" 2>/dev/null && ok "sudoers rules installed for WiFi management" \
