@@ -200,6 +200,7 @@ PYTHON_PKGS=(
     "bcrypt>=4.0.0"
     "cryptography>=41.0.0"
     "netifaces>=0.11.0"
+    "speedtest-cli>=2.1.3"
 )
 
 for pkg in "${PYTHON_PKGS[@]}"; do

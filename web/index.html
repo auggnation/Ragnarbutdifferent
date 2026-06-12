@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RAGNAR // NETWORK MONITOR</title>
+<title>MILD-VIKING // NETWORK MONITOR</title>
 <script src="https://cdn.socket.io/4.8.3/socket.io.min.js"></script>
 <style>
 /* ── Reset & base ─────────────────────────────────────────────── */
@@ -148,7 +148,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
       <div id="level-bar-wrap"><div id="level-bar" style="width:0%"></div></div>
     </div>
     <div id="title-center">
-      <div id="title-main">RAGNAR</div>
+      <div id="title-main">MILD-VIKING</div>
       <div id="title-sub">NETWORK MONITOR</div>
     </div>
     <div id="net-info">
@@ -181,6 +181,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
       <span id="stat-devices">0 DEVICES</span>
       <span id="stat-subnet">—</span>
       <span id="stat-uptime">UP: 0s</span>
+      <span id="stat-speed">SPD: —</span>
       <span id="stat-conn"><span id="conn-dot"></span>OFFLINE</span>
     </div>
   </div>
@@ -714,6 +715,9 @@ function updateHUD(data) {
   el('stat-devices').textContent = (data.device_count || 0) + ' DEVICES';
   el('stat-uptime').textContent  = 'UP: ' + (data.uptime_human || '0s');
   el('stat-subnet').textContent  = data.subnet || data.vlan_subnets?.[0] || '—';
+  if (data.speedtest_dl || data.speedtest_ul) {
+    el('stat-speed').textContent = `↓${(data.speedtest_dl||0).toFixed(0)} ↑${(data.speedtest_ul||0).toFixed(0)} Mb`;
+  }
 
   // Connection dot
   const dot = el('conn-dot');
@@ -770,7 +774,7 @@ const socket = io({
 });
 
 socket.on('connect', () => {
-  console.log('Connected to Ragnar server');
+  console.log('Connected to Mild-Viking server');
 });
 
 socket.on('disconnect', () => {

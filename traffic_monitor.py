@@ -91,13 +91,21 @@ class TrafficMonitor:
         self.subnet = ""
         self.vlan_subnets = []
 
+        # Speed test results
+        self.speedtest_dl   = 0.0   # Mbps download
+        self.speedtest_ul   = 0.0   # Mbps upload
+        self.speedtest_ping = 0.0   # ms
+        self.speedtest_at   = ""    # ISO timestamp of last test
+        self._speedtest_thread = None
+
         # Refresh timers
         self._last_info_update = 0.0
         self._last_style_cycle = 0.0
         self._last_scan_time = 0.0
-        self._INFO_INTERVAL = 15.0        # seconds
-        self._STYLE_INTERVAL = 45.0       # seconds per animation style
-        self._SCAN_INTERVAL = 120.0       # seconds between device scans
+        self._INFO_INTERVAL  = 15.0        # seconds
+        self._STYLE_INTERVAL = 45.0        # seconds per animation style
+        self._SCAN_INTERVAL  = 120.0       # seconds between device scans
+        self._SPEED_INTERVAL = 1800.0      # 30 min between speed tests
 
         # Do initial probe so data is available immediately
         self._probe_network_info()
@@ -118,11 +126,17 @@ class TrafficMonitor:
             target=self._scan_loop, daemon=True, name="device-scanner"
         )
         self._scan_thread.start()
+
+        self._speedtest_thread = threading.Thread(
+            target=self._speedtest_loop, daemon=True, name="speedtest"
+        )
+        self._speedtest_thread.start()
+
         logger.info("Traffic monitor started")
 
     def stop(self):
         self._stop.set()
-        for t in (self._traffic_thread, self._scan_thread):
+        for t in (self._traffic_thread, self._scan_thread, self._speedtest_thread):
             if t and t.is_alive():
                 t.join(timeout=5)
         logger.info("Traffic monitor stopped")
@@ -472,6 +486,54 @@ class TrafficMonitor:
 
         return []
 
+    # ── Speed test ────────────────────────────────────────────────────
+
+    def _speedtest_loop(self):
+        # Wait 90 s at startup so the network is settled before first test
+        self._stop.wait(90)
+        while not self._stop.is_set():
+            try:
+                self._run_speedtest()
+            except Exception as exc:
+                logger.error(f"Speed test error: {exc}")
+            self._stop.wait(self._SPEED_INTERVAL)
+
+    def _run_speedtest(self):
+        """Run speedtest-cli and store results. Non-fatal on any failure."""
+        try:
+            r = subprocess.run(
+                ['speedtest-cli', '--simple', '--secure'],
+                capture_output=True, text=True, timeout=90
+            )
+            dl = ul = ping = 0.0
+            for line in r.stdout.splitlines():
+                line = line.strip()
+                if line.startswith('Download:'):
+                    m = re.search(r'([\d.]+)', line)
+                    if m:
+                        dl = float(m.group(1))
+                elif line.startswith('Upload:'):
+                    m = re.search(r'([\d.]+)', line)
+                    if m:
+                        ul = float(m.group(1))
+                elif line.startswith('Ping:'):
+                    m = re.search(r'([\d.]+)', line)
+                    if m:
+                        ping = float(m.group(1))
+            if dl > 0 or ul > 0:
+                with self._lock:
+                    self.speedtest_dl   = dl
+                    self.speedtest_ul   = ul
+                    self.speedtest_ping = ping
+                    self.speedtest_at   = time.strftime('%H:%M')
+                logger.info(f"Speed test: ↓{dl:.1f} ↑{ul:.1f} Mbps  ping {ping:.0f}ms")
+            else:
+                logger.warning(f"Speed test returned no results: {r.stdout!r} {r.stderr!r}")
+        except FileNotFoundError:
+            logger.warning("speedtest-cli not found — skipping speed test")
+        except Exception as exc:
+            logger.warning(f"Speed test failed: {exc}")
+
     # ── Public API ────────────────────────────────────────────────────
 
     def get_status(self):
@@ -502,6 +564,10 @@ class TrafficMonitor:
                 'subnet': self.subnet,
                 'vlan_subnets': list(self.vlan_subnets),
                 'devices': self.devices[:50],
+                'speedtest_dl': self.speedtest_dl,
+                'speedtest_ul': self.speedtest_ul,
+                'speedtest_ping': self.speedtest_ping,
+                'speedtest_at': self.speedtest_at,
             }
 
     def trigger_scan(self):

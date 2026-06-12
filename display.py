@@ -1818,7 +1818,7 @@ class Display:
                          outline=_ring_col(wifi_on, ap_on, status_text), width=RING_W)
 
             # Title
-            title = "RAGNAR"
+            title = "MILD-VIKING"
             try:
                 tb = font_title.getbbox(title)
                 tx = (SIZE - (tb[2] - tb[0])) // 2
@@ -2395,8 +2395,8 @@ class Display:
         _png_counter  = 0
         _scroll_pos   = 0   # pixel offset for header scroll
 
-        # Width (px) available in the header beside "RAGNAR " prefix
-        _RAGNAR_LABEL = "RAGNAR "
+        # Width (px) available in the header beside "MILD-VIKING " prefix
+        _RAGNAR_LABEL = "MILD-VIKING "
         try:
             _ragnar_w = font_hdr.getbbox(_RAGNAR_LABEL)[2]
         except Exception:
@@ -2706,7 +2706,7 @@ class Display:
                     f"SCANS: {wd_max.get('scans_completed', 0)}",
                 ]
             return [
-                "* RAGNAR *",
+                "* MILD-VIKING *",
                 _get_targets(),
                 _get_credentials(),
                 _get_vulns(),
@@ -2894,23 +2894,21 @@ class Display:
                 sent_human   = tm_data.get('sent_rate_human', '0 B/s')
                 dev_count    = tm_data.get('device_count', 0)
                 conn_type    = tm_data.get('connection_type', '')
+                spd_dl       = tm_data.get('speedtest_dl', 0.0)
+                spd_ul       = tm_data.get('speedtest_ul', 0.0)
 
-                mode_labels  = {'idle': 'IDLE', 'active': 'ACTIVE', 'attack': 'STORM'}
-                mode_str     = mode_labels.get(anim_mode, 'IDLE')
-
-                display_label = f"RAGNAR  [{mode_str}]"
                 display_image = self.shared_data.attack if high_traffic else self.main_image
                 if not display_image:
                     display_image = getattr(self.shared_data, 'ragnarstatusimage', None)
 
-                # Title bar
-                draw.text((int(6 * sx), int(4 * sy)), display_label,
+                # Title bar — just the name, no mode label
+                draw.text((int(6 * sx), int(4 * sy)), "MILD-VIKING",
                           font=self.shared_data.font_arialbold, fill=0)
 
-                # Center image (Viking / attack graphic) — shrink to top 40% of screen
+                # Center image — 48% of screen height
                 if display_image is not None:
-                    max_h = int(H * 0.40)
-                    max_w = int(W * 0.85)
+                    max_h = int(H * 0.48)
+                    max_w = int(W * 0.90)
                     scale = min(max_w / max(display_image.width, 1), max_h / max(display_image.height, 1))
                     if scale > 0:
                         img_w = max(1, int(display_image.width  * scale))
@@ -2920,26 +2918,30 @@ class Display:
                         except Exception:
                             display_image = display_image.resize((img_w, img_h), Image.NEAREST)
                         cx = (W - display_image.width) // 2
-                        image.paste(display_image, (cx, int(H * 0.14)))
+                        image.paste(display_image, (cx, int(H * 0.13)))
 
-                # ── Status rows (bottom half) ────────────────────────────────────
-                # IP and network name
-                ip_str   = current_ip   if current_ip   else '---'
-                net_str  = current_ssid if current_ssid else (conn_type.upper() if conn_type else 'NO NET')
+                # ── Status rows ──────────────────────────────────────────────────
+                ip_str  = current_ip   if current_ip   else '---'
+                net_str = current_ssid if current_ssid else (conn_type.upper() if conn_type else 'NO NET')
+                if spd_dl or spd_ul:
+                    spd_str = f"{spd_dl:.0f}↓  {spd_ul:.0f}↑ Mb"
+                else:
+                    spd_str = "pending"
 
                 metrics = [
                     ("IP",  ip_str[:20]),
                     ("NET", net_str[:20]),
                     (f"LVL {level}", uptime_h),
                     (f"↓{recv_human}", f"↑{sent_human}"),
+                    ("SPD", spd_str),
                     ("DEV", str(dev_count)),
                 ]
 
-                y = int(H * 0.58)
+                y = int(H * 0.64)
                 for label, value in metrics:
                     draw.text((int(6 * sx), y), f"{label}  {value}",
                               font=self.shared_data.font_arial11, fill=0)
-                    y += int(13 * sy)
+                    y += int(12 * sy)
 
                 # Border
                 draw.rectangle((1, 1, W - 1, H - 1), outline=0)
