@@ -726,40 +726,63 @@ class TrafficMonitor:
             self._stop.wait(interval)
 
     def _run_speedtest(self):
-        """Run speedtest-cli and store results. Non-fatal on any failure."""
+        """Run a speed test. Tries Python module first, then CLI fallback."""
+        dl = ul = ping = 0.0
+
+        # --- Method 1: Python speedtest module (most reliable) ---
         try:
-            r = subprocess.run(
+            import speedtest as _st
+            s = _st.Speedtest(secure=True)
+            s.get_best_server()
+            dl   = s.download() / 1_000_000   # bps → Mbps
+            ul   = s.upload()   / 1_000_000
+            ping = s.results.ping
+        except ImportError:
+            # --- Method 2: speedtest-cli subprocess ---
+            cmds = [
                 ['speedtest-cli', '--simple', '--secure'],
-                capture_output=True, text=True, timeout=90
-            )
-            dl = ul = ping = 0.0
-            for line in r.stdout.splitlines():
-                line = line.strip()
-                if line.startswith('Download:'):
-                    m = re.search(r'([\d.]+)', line)
-                    if m:
-                        dl = float(m.group(1))
-                elif line.startswith('Upload:'):
-                    m = re.search(r'([\d.]+)', line)
-                    if m:
-                        ul = float(m.group(1))
-                elif line.startswith('Ping:'):
-                    m = re.search(r'([\d.]+)', line)
-                    if m:
-                        ping = float(m.group(1))
-            if dl > 0 or ul > 0:
-                with self._lock:
-                    self.speedtest_dl   = dl
-                    self.speedtest_ul   = ul
-                    self.speedtest_ping = ping
-                    self.speedtest_at   = time.strftime('%H:%M')
-                logger.info(f"Speed test: ↓{dl:.1f} ↑{ul:.1f} Mbps  ping {ping:.0f}ms")
+                ['python3', '-m', 'speedtest', '--simple', '--secure'],
+            ]
+            for cmd in cmds:
+                try:
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+                    for line in r.stdout.splitlines():
+                        line = line.strip()
+                        if line.startswith('Download:'):
+                            m = re.search(r'([\d.]+)', line)
+                            if m: dl = float(m.group(1))
+                        elif line.startswith('Upload:'):
+                            m = re.search(r'([\d.]+)', line)
+                            if m: ul = float(m.group(1))
+                        elif line.startswith('Ping:'):
+                            m = re.search(r'([\d.]+)', line)
+                            if m: ping = float(m.group(1))
+                    if dl > 0 or ul > 0:
+                        break
+                    if r.returncode != 0:
+                        logger.warning(f"speedtest cmd {cmd[0]} failed: {r.stderr.strip()!r}")
+                except FileNotFoundError:
+                    continue
+                except Exception as exc:
+                    logger.warning(f"speedtest cmd {cmd[0]} error: {exc}")
+                    continue
             else:
-                logger.warning(f"Speed test returned no results: {r.stdout!r} {r.stderr!r}")
-        except FileNotFoundError:
-            logger.warning("speedtest-cli not found — skipping speed test")
+                if not (dl > 0 or ul > 0):
+                    logger.warning("speedtest-cli not found — install: pip3 install speedtest-cli")
+                    return
         except Exception as exc:
             logger.warning(f"Speed test failed: {exc}")
+            return
+
+        if dl > 0 or ul > 0:
+            with self._lock:
+                self.speedtest_dl   = dl
+                self.speedtest_ul   = ul
+                self.speedtest_ping = ping
+                self.speedtest_at   = time.strftime('%H:%M')
+            logger.info(f"Speed test: ↓{dl:.1f} ↑{ul:.1f} Mbps  ping {ping:.0f}ms")
+        else:
+            logger.warning("Speed test returned zero results — check network connectivity")
 
     # ── Public API ────────────────────────────────────────────────────
 
