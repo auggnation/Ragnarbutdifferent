@@ -6,6 +6,7 @@ import time
 import subprocess
 import re
 import logging
+import socket
 from collections import deque
 
 logger = logging.getLogger("traffic_monitor")
@@ -91,6 +92,12 @@ class TrafficMonitor:
         self.subnet = ""
         self.vlan_subnets = []
 
+        # Persistent device registry: ip → {ip, mac, hostname, first_seen, last_seen}
+        self._known_devices = {}
+
+        # Hostname resolution cache: ip → (hostname, expiry_timestamp)
+        self._hostname_cache = {}
+
         # Per-device traffic attribution (ip → {connections, bytes_in, bytes_out, rate_in, rate_out})
         self._dev_traffic = {}
 
@@ -99,6 +106,7 @@ class TrafficMonitor:
         self.speedtest_ul   = 0.0   # Mbps upload
         self.speedtest_ping = 0.0   # ms
         self.speedtest_at   = ""    # ISO timestamp of last test
+        self.speedtest_running = False
         self._speedtest_thread = None
 
         # Refresh timers
@@ -385,6 +393,57 @@ class TrafficMonitor:
 
     # ── Device discovery ──────────────────────────────────────────────
 
+    def _resolve_hostname(self, ip):
+        """Try multiple methods to resolve a hostname for an IP. Returns '' on failure."""
+        now = time.time()
+        cached = self._hostname_cache.get(ip)
+        if cached and now < cached[1]:
+            return cached[0]
+
+        hostname = ''
+
+        # 1. DNS PTR reverse lookup (fast, works on most networks)
+        try:
+            result = socket.gethostbyaddr(ip)
+            h = result[0].split('.')[0]  # short name only
+            if h and h != ip:
+                hostname = h
+        except Exception:
+            pass
+
+        # 2. avahi-resolve (mDNS/Bonjour — works for .local devices)
+        if not hostname:
+            try:
+                r = subprocess.run(
+                    ['avahi-resolve', '-a', ip],
+                    capture_output=True, text=True, timeout=2
+                )
+                m = re.search(r'\S+\.local', r.stdout)
+                if m:
+                    hostname = m.group(0).replace('.local', '')
+            except Exception:
+                pass
+
+        # 3. nmblookup (NetBIOS — works for Windows/Samba devices)
+        if not hostname:
+            try:
+                r = subprocess.run(
+                    ['nmblookup', '-A', ip],
+                    capture_output=True, text=True, timeout=3
+                )
+                for line in r.stdout.splitlines():
+                    m = re.match(r'\s+(\S+)\s+<00>', line)
+                    if m and m.group(1) not in ('<01>', '__MSBROWSE__'):
+                        hostname = m.group(1).strip()
+                        break
+            except Exception:
+                pass
+
+        # Cache result for 5 minutes (or 30s for empty results to retry sooner)
+        ttl = 300 if hostname else 30
+        self._hostname_cache[ip] = (hostname, now + ttl)
+        return hostname
+
     def _scan_devices(self):
         with self._lock:
             iface = self.interface_name
@@ -397,7 +456,30 @@ class TrafficMonitor:
             devices = self._scan_subnet(sn, iface)
             all_devices.extend(devices)
 
+        # Enrich hostnames for devices that don't have one
+        for dev in all_devices:
+            if not dev.get('hostname'):
+                dev['hostname'] = self._resolve_hostname(dev['ip'])
+
+        # Update persistent device registry
+        now_str = time.strftime('%Y-%m-%dT%H:%M:%S')
         with self._lock:
+            for dev in all_devices:
+                ip = dev['ip']
+                known = self._known_devices.get(ip, {})
+                # Prefer non-empty values for each field
+                mac = dev.get('mac') or known.get('mac', '')
+                hostname = dev.get('hostname') or known.get('hostname', '')
+                self._known_devices[ip] = {
+                    'ip': ip,
+                    'mac': mac,
+                    'hostname': hostname,
+                    'first_seen': known.get('first_seen', now_str),
+                    'last_seen': now_str,
+                }
+                dev['mac'] = mac
+                dev['hostname'] = hostname
+
             self.devices = all_devices[:100]
             self.device_count = len(all_devices)
             self.vlan_subnets = subnets
@@ -655,6 +737,7 @@ class TrafficMonitor:
                 'speedtest_ul': self.speedtest_ul,
                 'speedtest_ping': self.speedtest_ping,
                 'speedtest_at': self.speedtest_at,
+                'speedtest_running': self.speedtest_running,
             }
 
     def _enrich_devices(self, devices):
@@ -675,3 +758,20 @@ class TrafficMonitor:
     def trigger_scan(self):
         """Force an immediate device scan in a background thread."""
         threading.Thread(target=self._scan_devices, daemon=True, name="scan-on-demand").start()
+
+    def trigger_speedtest(self):
+        """Run a speed test immediately in a background thread. No-op if one is running."""
+        if self.speedtest_running:
+            return
+        def _run():
+            self.speedtest_running = True
+            try:
+                self._run_speedtest()
+            finally:
+                self.speedtest_running = False
+        threading.Thread(target=_run, daemon=True, name="speedtest-on-demand").start()
+
+    def get_known_devices(self):
+        """Return the full persistent device registry."""
+        with self._lock:
+            return list(self._known_devices.values())

@@ -157,12 +157,62 @@ def api_wifi_connect():
         return jsonify({'error': 'ssid required'}), 400
     if _shared_data:
         networks = _shared_data.config.get('wifi_known_networks', [])
-        # Remove existing entry with same SSID
         networks = [n for n in networks if n.get('ssid') != ssid]
         networks.append({'ssid': ssid, 'password': password})
         _shared_data.config['wifi_known_networks'] = networks
         _shared_data.save_config()
     return jsonify({'status': 'network saved'})
+
+
+@app.route('/api/settings', methods=['GET', 'POST'])
+def api_settings():
+    """Device name and dashboard password settings."""
+    if _shared_data is None:
+        return jsonify({})
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        current_pw = _shared_data.config.get('dashboard_password', '')
+        # Require current password if one is set
+        if current_pw and data.get('current_password', '') != current_pw:
+            return jsonify({'error': 'wrong password'}), 403
+        if 'device_name' in data:
+            name = str(data['device_name']).strip() or 'MILD-VIKING'
+            _shared_data.config['device_name'] = name
+        if 'dashboard_password' in data:
+            _shared_data.config['dashboard_password'] = str(data['dashboard_password'])
+        try:
+            _shared_data.save_config()
+        except Exception:
+            pass
+        return jsonify({'status': 'saved'})
+    pw_set = bool(_shared_data.config.get('dashboard_password', ''))
+    return jsonify({
+        'device_name': _shared_data.config.get('device_name', 'MILD-VIKING'),
+        'password_set': pw_set,
+    })
+
+
+@app.route('/api/auth', methods=['POST'])
+def api_auth():
+    """Validate dashboard password. Returns ok/error."""
+    if _shared_data is None:
+        return jsonify({'status': 'ok'})
+    pw = _shared_data.config.get('dashboard_password', '')
+    if not pw:
+        return jsonify({'status': 'ok'})
+    data = request.get_json(silent=True) or {}
+    if data.get('password', '') == pw:
+        return jsonify({'status': 'ok'})
+    return jsonify({'status': 'error'}), 403
+
+
+@app.route('/api/devices/all')
+def api_devices_all():
+    """Return the full persistent device registry (all ever-seen devices)."""
+    mon = _monitor()
+    if mon and hasattr(mon, 'get_known_devices'):
+        return jsonify({'devices': mon.get_known_devices()})
+    return jsonify({'devices': []})
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────
@@ -182,6 +232,35 @@ def on_request_scan():
     if mon:
         mon.trigger_scan()
         emit('scan_triggered', {'status': 'ok'})
+
+
+@socketio.on('request_speedtest')
+def on_request_speedtest():
+    mon = _monitor()
+    if not mon:
+        emit('speedtest_result', {'error': 'monitor unavailable'})
+        return
+    if mon.speedtest_running:
+        emit('speedtest_result', {'running': True})
+        return
+    emit('speedtest_result', {'running': True})
+
+    def _run_and_emit():
+        mon.trigger_speedtest()
+        # Poll until done (max 120s)
+        for _ in range(120):
+            time.sleep(1)
+            if not mon.speedtest_running:
+                break
+        socketio.emit('speedtest_result', {
+            'running': False,
+            'dl': mon.speedtest_dl,
+            'ul': mon.speedtest_ul,
+            'ping': mon.speedtest_ping,
+            'at': mon.speedtest_at,
+        })
+
+    threading.Thread(target=_run_and_emit, daemon=True, name="speedtest-emit").start()
 
 
 def _broadcast_loop():

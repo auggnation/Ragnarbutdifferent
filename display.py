@@ -1829,7 +1829,7 @@ class Display:
                          outline=_ring_col(wifi_on, ap_on, status_text), width=RING_W)
 
             # Title
-            title = "MILD-VIKING"
+            title = getattr(self.shared_data, 'config', {}).get('device_name', 'MILD-VIKING')
             try:
                 tb = font_title.getbbox(title)
                 tx = (SIZE - (tb[2] - tb[0])) // 2
@@ -2406,8 +2406,9 @@ class Display:
         _png_counter  = 0
         _scroll_pos   = 0   # pixel offset for header scroll
 
-        # Width (px) available in the header beside "MILD-VIKING " prefix
-        _RAGNAR_LABEL = "MILD-VIKING "
+        # Width (px) available in the header beside device name prefix
+        _dev_name = getattr(self.shared_data, 'config', {}).get('device_name', 'MILD-VIKING')
+        _RAGNAR_LABEL = _dev_name + " "
         try:
             _ragnar_w = font_hdr.getbbox(_RAGNAR_LABEL)[2]
         except Exception:
@@ -2926,7 +2927,8 @@ class Display:
                     return '  '.join('●' if i == cur else '○' for i in range(total))
 
                 # ── ALWAYS: Title + Viking image in top half ─────────────────────
-                draw.text((int(6 * sx), int(4 * sy)), "MILD-VIKING",
+                _title = getattr(self.shared_data, 'config', {}).get('device_name', 'MILD-VIKING')
+                draw.text((int(6 * sx), int(4 * sy)), _title,
                           font=self.shared_data.font_arialbold, fill=0)
 
                 if display_image is not None:

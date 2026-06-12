@@ -72,16 +72,76 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 #stat-subnet{font-size:11px;letter-spacing:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #stat-conn{font-size:11px;letter-spacing:2px}
 
-/* ── Corner scan button ───────────────────────────────────────── */
-#scan-btn{
-  position:fixed;bottom:14px;right:20px;z-index:20;
-  pointer-events:all;cursor:pointer;
+/* ── Corner buttons ───────────────────────────────────────────── */
+.corner-btn{
+  position:fixed;z-index:20;pointer-events:all;cursor:pointer;
   font-size:10px;letter-spacing:3px;text-transform:uppercase;
   padding:6px 14px;border:1px solid rgba(255,255,255,.3);
   background:rgba(0,0,0,.5);color:rgba(255,255,255,.6);
   transition:all .2s;
 }
-#scan-btn:hover{border-color:currentColor;color:#fff;text-shadow:0 0 8px #fff;box-shadow:0 0 10px rgba(255,255,255,.2)}
+.corner-btn:hover{border-color:currentColor;color:#fff;text-shadow:0 0 8px #fff;box-shadow:0 0 10px rgba(255,255,255,.2)}
+#scan-btn{bottom:14px;right:20px}
+#speedtest-btn{bottom:14px;right:100px}
+#settings-btn{top:14px;right:14px;font-size:16px;letter-spacing:0;padding:4px 10px;border-radius:4px}
+
+/* ── Settings & password modals ───────────────────────────────── */
+.mv-modal-overlay{
+  position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.8);
+  display:flex;align-items:center;justify-content:center;
+}
+.mv-modal-overlay.hidden{display:none}
+.mv-modal{
+  background:#0a0a1a;border:1px solid rgba(255,255,255,.2);
+  padding:28px 32px;min-width:320px;max-width:420px;width:90%;
+  font-size:12px;letter-spacing:1px;
+}
+.mv-modal h2{font-size:13px;letter-spacing:4px;text-transform:uppercase;margin-bottom:20px;opacity:.8}
+.mv-field{margin-bottom:16px}
+.mv-field label{display:block;font-size:10px;letter-spacing:3px;text-transform:uppercase;opacity:.55;margin-bottom:6px}
+.mv-field input{
+  width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.2);
+  color:#fff;font-family:'Courier New',monospace;font-size:13px;padding:8px 10px;outline:none;
+}
+.mv-field input:focus{border-color:rgba(255,255,255,.5)}
+.mv-actions{display:flex;gap:10px;margin-top:20px;justify-content:flex-end}
+.mv-btn{
+  font-family:'Courier New',monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;
+  padding:7px 18px;border:1px solid rgba(255,255,255,.3);background:transparent;
+  color:rgba(255,255,255,.7);cursor:pointer;transition:all .2s;
+}
+.mv-btn:hover{border-color:#fff;color:#fff}
+.mv-btn.primary{border-color:currentColor;color:#fff}
+.mv-msg{font-size:10px;letter-spacing:1px;margin-top:10px;opacity:.6;min-height:14px}
+#speedtest-status{
+  position:fixed;bottom:44px;right:100px;z-index:20;
+  font-size:9px;letter-spacing:2px;text-transform:uppercase;
+  opacity:0;transition:opacity .3s;pointer-events:none;
+}
+
+/* ── E-paper screen viewer ────────────────────────────────────── */
+#screen-panel{
+  position:fixed;left:0;top:50%;transform:translateY(-50%) translateX(-100%);
+  z-index:15;background:rgba(0,0,0,.9);border:1px solid rgba(255,255,255,.15);
+  border-left:none;transition:transform .3s ease;pointer-events:all;
+  padding:10px;display:flex;flex-direction:column;align-items:center;gap:8px;
+  min-width:140px;
+}
+#screen-panel.open{transform:translateY(-50%) translateX(0)}
+#screen-panel img{
+  image-rendering:pixelated;max-width:200px;width:100%;
+  border:1px solid rgba(255,255,255,.1);
+}
+#screen-panel-label{font-size:9px;letter-spacing:3px;opacity:.5;text-transform:uppercase}
+#screen-toggle{
+  position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:16;
+  pointer-events:all;cursor:pointer;
+  writing-mode:vertical-rl;text-orientation:mixed;
+  font-size:9px;letter-spacing:3px;text-transform:uppercase;
+  padding:10px 5px;border:1px solid rgba(255,255,255,.2);border-left:none;
+  background:rgba(0,0,0,.6);color:rgba(255,255,255,.5);transition:all .2s;
+}
+#screen-toggle:hover{color:#fff;border-color:rgba(255,255,255,.5)}
 
 /* ── VLAN panel ───────────────────────────────────────────────── */
 #vlans-panel{
@@ -198,8 +258,57 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 </div>
 
 <!-- ── Corner buttons ── -->
-<button id="scan-btn">⟳ SCAN</button>
-<button id="toggle-vlans">⊟ VLANS</button>
+<button id="scan-btn" class="corner-btn">⟳ SCAN</button>
+<button id="speedtest-btn" class="corner-btn">⚡ SPEEDTEST</button>
+<button id="toggle-vlans" class="corner-btn" style="bottom:14px;left:20px">⊟ VLANS</button>
+<button id="settings-btn" class="corner-btn">⚙</button>
+<div id="speedtest-status"></div>
+
+<!-- ── E-paper screen viewer ── -->
+<div id="screen-toggle">📺 SCREEN</div>
+<div id="screen-panel">
+  <div id="screen-panel-label">DEVICE SCREEN</div>
+  <img id="screen-img" src="/web/screen.png" alt="device screen">
+</div>
+
+<!-- ── Password gate modal ── -->
+<div id="pw-modal" class="mv-modal-overlay hidden">
+  <div class="mv-modal">
+    <h2>Dashboard Locked</h2>
+    <div class="mv-field">
+      <label>Password</label>
+      <input type="password" id="pw-input" placeholder="enter password" autocomplete="current-password">
+    </div>
+    <div class="mv-msg" id="pw-msg"></div>
+    <div class="mv-actions">
+      <button class="mv-btn primary" id="pw-submit">Unlock</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Settings modal ── -->
+<div id="settings-modal" class="mv-modal-overlay hidden">
+  <div class="mv-modal">
+    <h2>⚙ Settings</h2>
+    <div class="mv-field">
+      <label>Device Name</label>
+      <input type="text" id="set-name" placeholder="MILD-VIKING" maxlength="24">
+    </div>
+    <div class="mv-field">
+      <label>Current Password (if set)</label>
+      <input type="password" id="set-cur-pw" placeholder="leave blank if no password">
+    </div>
+    <div class="mv-field">
+      <label>New Password (leave blank to remove)</label>
+      <input type="password" id="set-new-pw" placeholder="new password or blank">
+    </div>
+    <div class="mv-msg" id="set-msg"></div>
+    <div class="mv-actions">
+      <button class="mv-btn" id="set-cancel">Cancel</button>
+      <button class="mv-btn primary" id="set-save">Save</button>
+    </div>
+  </div>
+</div>
 
 <script>
 'use strict';
@@ -815,13 +924,25 @@ function _drawBubbles(ts) {
     // Physics: drift + soft wall bounce
     n.x += n.vx;
     n.y += n.vy;
-    const margin = n.r + 10;
-    if (n.x < margin)          { n.vx += 0.05; }
-    if (n.x > W - margin)      { n.vx -= 0.05; }
-    if (n.y < margin + 60)     { n.vy += 0.05; }
-    if (n.y > H - margin - 50) { n.vy -= 0.05; }
+    const totalRateNow = n.rateIn + n.rateOut;
+    const isActivePhy  = totalRateNow > 5_000;
+    // Active devices: strong repulsion so they stay on screen always
+    const margin  = n.r + (isActivePhy ? 80  : 12);
+    const force   = isActivePhy ? 0.18 : 0.05;
+    const topY    = margin + 60;
+    const botY    = H - margin - 50;
+    if (n.x < margin)  { n.vx += force; }
+    if (n.x > W - margin) { n.vx -= force; }
+    if (n.y < topY)    { n.vy += force; }
+    if (n.y > botY)    { n.vy -= force; }
+    // Hard clamp for active devices — never let them go off screen
+    if (isActivePhy) {
+      n.x = Math.max(margin, Math.min(W - margin, n.x));
+      n.y = Math.max(topY, Math.min(botY, n.y));
+    }
+    const maxSpd = isActivePhy ? 0.7 : 0.6;
     const spd = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
-    if (spd > 0.6) { n.vx *= 0.6 / spd; n.vy *= 0.6 / spd; }
+    if (spd > maxSpd) { n.vx *= maxSpd / spd; n.vy *= maxSpd / spd; }
     n.vx += (Math.random() - 0.5) * 0.02;
     n.vy += (Math.random() - 0.5) * 0.02;
     n.r  += (n.targetR - n.r) * 0.05;
@@ -913,29 +1034,6 @@ requestAnimationFrame(_drawBubbles);
 // DEVICES + VLANS PANELS
 // ═══════════════════════════════════════════════════════════════════
 
-function updateDevices(devices, count) {
-  const list = el('devices-list');
-  el('devices-header-count').textContent = `DEVICES (${count || 0})`;
-  if (!devices || !devices.length) {
-    list.innerHTML = '<div class="device-item" style="opacity:.4">Scanning…</div>';
-    return;
-  }
-  list.innerHTML = devices.map(d => {
-    const hasTraffic = (d.rate_in || 0) + (d.rate_out || 0) > 500;
-    const trafficRow = hasTraffic
-      ? `<div style="opacity:.7;font-size:9px;margin-top:2px">↓${d.rate_in_human||'0 B/s'}  ↑${d.rate_out_human||'0 B/s'}</div>`
-      : '';
-    const connRow = d.connections
-      ? `<div style="opacity:.45;font-size:9px">${d.connections} conn</div>`
-      : '';
-    return `<div class="device-item">
-      <div class="device-ip">${d.ip}</div>
-      ${d.mac ? `<div class="device-mac">${d.mac}</div>` : ''}
-      ${d.hostname ? `<div class="device-host">${d.hostname}</div>` : ''}
-      ${trafficRow}${connRow}
-    </div>`;
-  }).join('');
-}
 
 function updateVlans(vlans, subnet, gateway) {
   const list = el('vlans-list');
@@ -985,7 +1083,7 @@ socket.on('status_update', data => {
   }
 });
 
-// ── Scan button ────────────────────────────────────────────────────
+// ── Scan button ───────────────────────────────────────────────────
 el('scan-btn').addEventListener('click', () => {
   socket.emit('request_scan');
   el('scan-btn').textContent = '⟳ SCANNING...';
@@ -994,6 +1092,125 @@ el('scan-btn').addEventListener('click', () => {
     el('scan-btn').textContent = '⟳ SCAN';
     el('scan-btn').style.pointerEvents = 'auto';
   }, 5000);
+});
+
+// ── Speedtest button ───────────────────────────────────────────────
+el('speedtest-btn').addEventListener('click', () => {
+  socket.emit('request_speedtest');
+  el('speedtest-btn').textContent = '⚡ RUNNING...';
+  el('speedtest-btn').style.pointerEvents = 'none';
+  el('speedtest-status').style.opacity = '1';
+  el('speedtest-status').textContent = 'RUNNING SPEED TEST...';
+});
+socket.on('speedtest_result', data => {
+  if (!data.running) {
+    el('speedtest-btn').textContent = '⚡ SPEEDTEST';
+    el('speedtest-btn').style.pointerEvents = 'auto';
+    const statusEl = el('speedtest-status');
+    if (data.dl !== undefined) {
+      statusEl.textContent = `↓${data.dl.toFixed(1)} ↑${data.ul.toFixed(1)} Mb  ${data.ping.toFixed(0)}ms`;
+      el('stat-speed').textContent = `↓${data.dl.toFixed(0)} ↑${data.ul.toFixed(0)} Mb`;
+    } else {
+      statusEl.textContent = 'TEST FAILED';
+    }
+    setTimeout(() => { statusEl.style.opacity = '0'; }, 6000);
+  }
+});
+
+// ── Screen viewer toggle ───────────────────────────────────────────
+el('screen-toggle').addEventListener('click', () => {
+  el('screen-panel').classList.toggle('open');
+});
+// Refresh screen image every 3s when panel is open
+setInterval(() => {
+  if (el('screen-panel').classList.contains('open')) {
+    const img = el('screen-img');
+    img.src = '/web/screen.png?t=' + Date.now();
+  }
+}, 3000);
+
+// ── Settings modal ─────────────────────────────────────────────────
+el('settings-btn').addEventListener('click', () => {
+  // Pre-fill current device name
+  fetch('/api/settings').then(r => r.json()).then(d => {
+    el('set-name').value = d.device_name || 'MILD-VIKING';
+    el('set-cur-pw').value = '';
+    el('set-new-pw').value = '';
+    el('set-msg').textContent = '';
+    el('settings-modal').classList.remove('hidden');
+  });
+});
+el('set-cancel').addEventListener('click', () => {
+  el('settings-modal').classList.add('hidden');
+});
+el('set-save').addEventListener('click', async () => {
+  const payload = {
+    device_name:      el('set-name').value.trim() || 'MILD-VIKING',
+    current_password: el('set-cur-pw').value,
+    dashboard_password: el('set-new-pw').value,
+  };
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (d.error) {
+      el('set-msg').textContent = '✗ ' + d.error;
+    } else {
+      el('set-msg').textContent = '✓ Saved';
+      // Update title in HUD immediately
+      el('title-main').textContent = payload.device_name;
+      document.title = payload.device_name + ' // NETWORK MONITOR';
+      setTimeout(() => el('settings-modal').classList.add('hidden'), 800);
+    }
+  } catch(e) {
+    el('set-msg').textContent = '✗ Error saving';
+  }
+});
+// Close on backdrop click
+el('settings-modal').addEventListener('click', e => {
+  if (e.target === el('settings-modal')) el('settings-modal').classList.add('hidden');
+});
+
+// ── Password gate ──────────────────────────────────────────────────
+let _authed = localStorage.getItem('mv_authed') === '1';
+(async () => {
+  try {
+    const r = await fetch('/api/settings');
+    const d = await r.json();
+    // Update title from server
+    if (d.device_name) {
+      el('title-main').textContent = d.device_name;
+      document.title = d.device_name + ' // NETWORK MONITOR';
+    }
+    // Show password gate if password is set and not already authed
+    if (d.password_set && !_authed) {
+      el('pw-modal').classList.remove('hidden');
+    }
+  } catch(e) {}
+})();
+el('pw-submit').addEventListener('click', async () => {
+  const pw = el('pw-input').value;
+  try {
+    const r = await fetch('/api/auth', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: pw}),
+    });
+    if (r.ok) {
+      localStorage.setItem('mv_authed', '1');
+      el('pw-modal').classList.add('hidden');
+    } else {
+      el('pw-msg').textContent = '✗ Wrong password';
+    }
+  } catch(e) {
+    el('pw-msg').textContent = '✗ Error';
+  }
+});
+el('pw-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') el('pw-submit').click();
 });
 
 // ── Fallback polling if socket not available ───────────────────────
