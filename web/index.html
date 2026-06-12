@@ -400,6 +400,24 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
+// Viking background image
+const vikingImg = new Image();
+vikingImg.src = '/web/images/mildviking.png';
+
+function drawVikingBg() {
+  if (!vikingImg.complete || !vikingImg.naturalWidth) return;
+  const tH = H * 0.70;
+  const tW = vikingImg.naturalWidth * (tH / vikingImg.naturalHeight);
+  const vx = W - tW - W * 0.05;
+  const vy = (H - tH) * 0.45;
+  ctx.save();
+  ctx.filter = 'invert(1)';
+  ctx.globalAlpha = 0.15;
+  ctx.globalCompositeOperation = 'screen';
+  ctx.drawImage(vikingImg, vx, vy, tW, tH);
+  ctx.restore();
+}
+
 // State
 let mode      = 'idle';
 let style     = 0;           // 0-3
@@ -753,6 +771,9 @@ function render(now) {
 
   // Subtle hex grid
   drawGrid();
+
+  // Viking background watermark
+  drawVikingBg();
 
   // Center glow
   drawCenterGlow();
