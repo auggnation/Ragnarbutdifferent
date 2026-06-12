@@ -2937,17 +2937,12 @@ class Display:
                     return f"{int(b)}B"
 
                 # ════════════════════════════════════════════════════════
-                # PERMANENT: name (left) + level (right) — always on screen
+                # PERMANENT: name + level together at top-left
                 # ════════════════════════════════════════════════════════
-                _title = getattr(self.shared_data, 'config', {}).get('device_name', 'MILD-VIKING')
-                draw.text((int(4 * sx), int(2 * sy)), _title,
-                          font=self.shared_data.font_arialbold, fill=0)
+                _title   = getattr(self.shared_data, 'config', {}).get('device_name', 'MILD-VIKING')
                 _lvl_str = f"LV{level}"
-                try:
-                    _lw = int(self.shared_data.font_arialbold.getlength(_lvl_str))
-                except Exception:
-                    _lw = len(_lvl_str) * 6
-                draw.text((W - _lw - int(4 * sx), int(2 * sy)), _lvl_str,
+                _header_line = f"{_title}  {_lvl_str}"
+                draw.text((int(4 * sx), int(2 * sy)), _header_line,
                           font=self.shared_data.font_arialbold, fill=0)
 
                 # ════════════════════════════════════════════════════════
@@ -3002,7 +2997,7 @@ class Display:
                                   font=self.shared_data.font_arial9, fill=0)
 
                 # ════════════════════════════════════════════════════════
-                # PERMANENT: IP + network — always below Viking's feet
+                # PERMANENT: IP + network + speed test — below Viking's feet
                 # ════════════════════════════════════════════════════════
                 _py      = _img_end + int(2 * sy)
                 _ip_str  = current_ip if current_ip else '---'
@@ -3011,6 +3006,14 @@ class Display:
                           font=self.shared_data.font_arial11, fill=0)
                 _py += int(10 * sy)
                 draw.text((int(4 * sx), _py), _net_str[:22],
+                          font=self.shared_data.font_arial11, fill=0)
+                _py += int(10 * sy)
+                # Speed test: show last result or placeholder
+                if spd_dl or spd_ul:
+                    _spd_str = f"↓{spd_dl:.0f} ↑{spd_ul:.0f} Mb"
+                else:
+                    _spd_str = "SPD: ---"
+                draw.text((int(4 * sx), _py), _spd_str[:22],
                           font=self.shared_data.font_arial11, fill=0)
                 _py += int(10 * sy)
 

@@ -454,6 +454,11 @@ class TrafficMonitor:
             subnet = self.subnet
 
         subnets = self._discover_subnets() if not subnet else [subnet]
+        # Merge manually configured subnets from settings
+        cfg = getattr(self.shared_data, 'config', {}) if self.shared_data else {}
+        for extra in cfg.get('manual_vlans', []):
+            if extra not in subnets:
+                subnets.append(extra)
         all_devices = []
 
         for sn in subnets:

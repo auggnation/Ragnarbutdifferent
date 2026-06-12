@@ -181,6 +181,25 @@ html,body{background:#050510;color:#fff;font-family:'Courier New',monospace;min-
     </div>
   </div>
 
+  <!-- VLAN / EXTRA SUBNETS -->
+  <div class="section">
+    <div class="section-header">VLAN / Extra Subnets to Scan</div>
+    <div class="section-body">
+      <div id="vlan-list" class="net-list">
+        <div class="net-item" style="opacity:.4">Loading…</div>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label>Add subnet (CIDR)</label>
+        <input type="text" id="vlan-input" placeholder="e.g. 192.168.10.0/24">
+        <div class="field-note">Added to auto-detected subnets — re-scan after adding</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="addVlan()">Add Subnet</button>
+        <span class="msg" id="vlan-msg"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- SPEED TESTS -->
   <div class="section">
     <div class="section-header">Speed Tests</div>
@@ -333,6 +352,7 @@ async function loadAll() {
     document.getElementById('notify-rec').checked  = c.notify_on_reconnect  !== false;
 
     loadNets();
+    loadVlans();
   } catch(e) {
     console.error('loadAll:', e);
   }
@@ -493,6 +513,59 @@ async function sendReportNow(btn) {
     }
   } catch(e) { msg('report-msg', '✗ Error', 'err'); }
   finally    { btn.disabled = false; }
+}
+
+// ── VLAN / SUBNETS ────────────────────────────────────────────────
+async function loadVlans() {
+  try {
+    const d = await api('/api/config');
+    const vlans = d.manual_vlans || [];
+    const box = document.getElementById('vlan-list');
+    if (!vlans.length) {
+      box.innerHTML = '<div class="net-item" style="opacity:.4">No manual subnets — using auto-detection only</div>';
+      return;
+    }
+    box.innerHTML = vlans.map(v =>
+      `<div class="net-item">
+        <span>${escHtml(v)}</span>
+        <span class="net-remove" onclick="removeVlan('${escJs(v)}')">✕</span>
+      </div>`
+    ).join('');
+  } catch(e) {}
+}
+
+async function addVlan() {
+  const val = document.getElementById('vlan-input').value.trim();
+  if (!val) { msg('vlan-msg', '✗ Enter a subnet', 'err'); return; }
+  if (!/^\d+\.\d+\.\d+\.\d+\/\d+$/.test(val)) {
+    msg('vlan-msg', '✗ Format: 192.168.10.0/24', 'err'); return;
+  }
+  try {
+    const cfg = await api('/api/config');
+    const vlans = cfg.manual_vlans || [];
+    if (!vlans.includes(val)) vlans.push(val);
+    const r = await api('/api/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({manual_vlans: vlans}),
+    });
+    if (r.status === 'saved') {
+      msg('vlan-msg', '✓ Added — rescan to apply', 'ok');
+      document.getElementById('vlan-input').value = '';
+      loadVlans();
+    }
+  } catch(e) { msg('vlan-msg', '✗ Error', 'err'); }
+}
+
+async function removeVlan(subnet) {
+  try {
+    const cfg = await api('/api/config');
+    const vlans = (cfg.manual_vlans || []).filter(v => v !== subnet);
+    await api('/api/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({manual_vlans: vlans}),
+    });
+    loadVlans();
+  } catch(e) {}
 }
 
 // ── SPEED TESTS ──────────────────────────────────────────────────

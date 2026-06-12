@@ -136,6 +136,8 @@ _CONFIG_SAFE_KEYS = {
     'notify_on_disconnect', 'notify_on_reconnect',
     # Monthly device report
     'monthly_report_enabled', 'monthly_report_email', 'monthly_report_last',
+    # Manual VLAN/subnet list
+    'manual_vlans',
 }
 
 
