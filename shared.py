@@ -1,6 +1,6 @@
 #shared.py
 # Description:
-# This file, shared.py, is a core component responsible for managing shared resources and data for different modules in the Ragnar project.
+# This file, shared.py, is a core component responsible for managing shared resources and data for Mild-Viking.
 # It handles the initialization and configuration of paths, logging, fonts, and images. Additionally, it sets up the environment, 
 # creates necessary directories and files, and manages the loading and saving of configuration settings.
 # 
@@ -594,7 +594,7 @@ class SharedData:
         """ You can mofify the json file shared_config.json or on the web page to change the default values of the configuration settings."""
         default_profile = DISPLAY_PROFILES.get(DEFAULT_EPD_TYPE, {"ref_width": 122, "ref_height": 250, "default_flip": False})
         return {
-            "__title_Ragnar__": "Settings",
+            "__title_MildViking__": "Settings",
             "manual_mode": False,
             "websrv": True,
             "web_bind_interface": "",
@@ -675,8 +675,8 @@ class SharedData:
             "__title_wifi__": "Wi-Fi Management",
             "wifi_known_networks": [],
             "wifi_default_interface": "auto",
-            "wifi_ap_ssid": "RAGNAR WIFI",
-            "wifi_ap_password": "ragnarThe Viking",
+            "wifi_ap_ssid": "MILD-VIKING WIFI",
+            "wifi_ap_password": "mildviking",
             "wifi_connection_timeout": 60,
             "wifi_max_attempts": 3,
             "wifi_scan_interval": 300,

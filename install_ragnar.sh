@@ -1,5 +1,5 @@
 #!/bin/bash
-# Ragnar Network Monitor — Install Script
+# Mild-Viking Network Monitor — Install Script
 # Usage:
 #   wget https://raw.githubusercontent.com/auggnation/Ragnarbutdifferent/main/install_ragnar.sh
 #   sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
@@ -12,14 +12,14 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; WHITE='\033[1;37m'; NC='\033[0m'
 
 # ── Config ────────────────────────────────────────────────────────
-RAGNAR_USER="ragnar"
-RAGNAR_PATH="/home/${RAGNAR_USER}/Ragnar"
+RAGNAR_USER="mild-viking"
+RAGNAR_PATH="/home/${RAGNAR_USER}/mild-viking"
 GITHUB_REPO="https://github.com/auggnation/Ragnarbutdifferent"
 GITHUB_RAW="https://raw.githubusercontent.com/auggnation/Ragnarbutdifferent/main"
 BRANCH="main"
-SERVICE_NAME="ragnar"
+SERVICE_NAME="mild-viking"
 WEB_PORT=8000
-LOG_DIR="/var/log/ragnar_install"
+LOG_DIR="/var/log/mild-viking_install"
 LOG_FILE="${LOG_DIR}/install_$(date +%Y%m%d_%H%M%S).log"
 GIT_WORKS=true
 
@@ -78,13 +78,13 @@ clone_or_download() {
 clear
 echo -e "${CYAN}"
 cat << 'EOF'
- ██████╗  █████╗  ██████╗ ███╗   ██╗ █████╗ ██████╗
- ██╔══██╗██╔══██╗██╔════╝ ████╗  ██║██╔══██╗██╔══██╗
- ██████╔╝███████║██║  ███╗██╔██╗ ██║███████║██████╔╝
- ██╔══██╗██╔══██║██║   ██║██║╚██╗██║██╔══██║██╔══██╗
- ██║  ██║██║  ██║╚██████╔╝██║ ╚████║██║  ██║██║  ██║
- ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═╝
-         NETWORK MONITOR  //  auggnation
+ ███╗   ███╗██╗██╗      ██████╗       ██╗   ██╗██╗██╗  ██╗██╗███╗   ██╗ ██████╗
+ ████╗ ████║██║██║      ██╔══██╗      ██║   ██║██║██║ ██╔╝██║████╗  ██║██╔════╝
+ ██╔████╔██║██║██║      ██║  ██║█████╗██║   ██║██║█████╔╝ ██║██╔██╗ ██║██║  ███╗
+ ██║╚██╔╝██║██║██║      ██║  ██║╚════╝╚██╗ ██╔╝██║██╔═██╗ ██║██║╚██╗██║██║   ██║
+ ██║ ╚═╝ ██║██║███████╗ ██████╔╝       ╚████╔╝ ██║██║  ██╗██║██║ ╚████║╚██████╔╝
+ ╚═╝     ╚═╝╚═╝╚══════╝ ╚═════╝         ╚═══╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝
+                      NETWORK MONITOR  //  auggnation
 EOF
 echo -e "${NC}"
 echo -e "${WHITE}Platform:${NC} $(uname -m) / $(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME}" || echo "Linux")"
@@ -140,7 +140,7 @@ if [ -d "$RAGNAR_PATH" ] && [ -f "$RAGNAR_PATH/Ragnar.py" ]; then
     info "Backing up existing installation to $BACKUP"
     # Preserve config and data
     if [ -f "$RAGNAR_PATH/config/shared_config.json" ]; then
-        cp -f "$RAGNAR_PATH/config/shared_config.json" /tmp/ragnar_config_backup.json 2>/dev/null || true
+        cp -f "$RAGNAR_PATH/config/shared_config.json" /tmp/mild-viking_config_backup.json 2>/dev/null || true
     fi
     mv "$RAGNAR_PATH" "$BACKUP" || true
 fi
@@ -149,16 +149,16 @@ mkdir -p "$RAGNAR_PATH"
 ok "Install directory ready: $RAGNAR_PATH"
 
 # ═══════════════════════════════════════════════════════════════════
-header "STEP 3 / 7  Download Ragnar"
+header "STEP 3 / 7  Download Mild-Viking"
 # ═══════════════════════════════════════════════════════════════════
 
 check_git
 cd /tmp
 
-TEMP_CLONE="/tmp/ragnar_src_$$"
+TEMP_CLONE="/tmp/mild-viking_src_$$"
 info "Downloading from ${GITHUB_REPO}..."
 if ! clone_or_download "$GITHUB_REPO" "$TEMP_CLONE" "$BRANCH"; then
-    die "Failed to download Ragnar. Check your internet connection."
+    die "Failed to download Mild-Viking. Check your internet connection."
 fi
 
 info "Copying files to $RAGNAR_PATH..."
@@ -167,14 +167,14 @@ rsync -a --exclude='.git' "${TEMP_CLONE}/" "${RAGNAR_PATH}/" 2>/dev/null || \
 rm -rf "$TEMP_CLONE"
 
 # Restore config if backed up
-if [ -f /tmp/ragnar_config_backup.json ]; then
+if [ -f /tmp/mild-viking_config_backup.json ]; then
     mkdir -p "$RAGNAR_PATH/config"
-    cp -f /tmp/ragnar_config_backup.json "$RAGNAR_PATH/config/shared_config.json"
+    cp -f /tmp/mild-viking_config_backup.json "$RAGNAR_PATH/config/shared_config.json"
     info "Restored previous configuration"
 fi
 
 chown -R "${RAGNAR_USER}:${RAGNAR_USER}" "$RAGNAR_PATH"
-ok "Ragnar downloaded and installed"
+ok "Mild-Viking downloaded and installed"
 
 # ═══════════════════════════════════════════════════════════════════
 header "STEP 4 / 7  Python virtual environment and dependencies"
@@ -245,7 +245,7 @@ header "STEP 6 / 7  Systemd service"
 # Write service unit
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
-Description=Ragnar Network Monitor
+Description=Mild-Viking Network Monitor
 After=network.target network-online.target
 Wants=network-online.target
 
@@ -258,7 +258,7 @@ Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=ragnar
+SyslogIdentifier=mild-viking
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=${RAGNAR_PATH}
 
@@ -273,9 +273,9 @@ EOF
 # Create env file template if missing
 if [ ! -f "${RAGNAR_PATH}/.env" ]; then
     cat > "${RAGNAR_PATH}/.env" << 'ENVEOF'
-# Ragnar Network Monitor — environment config
+# Mild-Viking Network Monitor — environment config
 # No secrets required for basic operation
-RAGNAR_DEBUG=false
+MILD_VIKING_DEBUG=false
 ENVEOF
     chown "${RAGNAR_USER}:${RAGNAR_USER}" "${RAGNAR_PATH}/.env"
 fi
@@ -325,10 +325,10 @@ if [ "$IS_ARM" = true ] && command -v raspi-config &>/dev/null; then
 fi
 
 # Start the service
-info "Starting Ragnar service..."
+info "Starting Mild-Viking service..."
 systemctl start "${SERVICE_NAME}.service" || warn "Service start failed — check: journalctl -u ${SERVICE_NAME}"
 
-ok "Ragnar service started"
+ok "Mild-Viking service started"
 
 # ═══════════════════════════════════════════════════════════════════
 # Summary
@@ -338,13 +338,13 @@ IP_ADDR=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "your-pi-ip")
 
 echo
 echo -e "${GREEN}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║         RAGNAR INSTALLATION COMPLETE             ║${NC}"
+echo -e "${GREEN}║         MILD-VIKING INSTALLATION COMPLETE             ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════╝${NC}"
 echo
 echo -e "${WHITE}Web dashboard:${NC}  http://${IP_ADDR}:${WEB_PORT}"
-echo -e "${WHITE}Service status:${NC} sudo systemctl status ragnar"
-echo -e "${WHITE}View logs:${NC}      sudo journalctl -u ragnar -f"
-echo -e "${WHITE}Restart:${NC}        sudo systemctl restart ragnar"
+echo -e "${WHITE}Service status:${NC} sudo systemctl status mild-viking"
+echo -e "${WHITE}View logs:${NC}      sudo journalctl -u mild-viking -f"
+echo -e "${WHITE}Restart:${NC}        sudo systemctl restart mild-viking"
 echo -e "${WHITE}Install log:${NC}    ${LOG_FILE}"
 echo
 echo -e "${CYAN}The dashboard will be available at http://${IP_ADDR}:${WEB_PORT}${NC}"

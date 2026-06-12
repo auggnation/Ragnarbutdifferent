@@ -1,5 +1,5 @@
 # webapp.py
-# Ragnar Network Monitor — web server on port 8000
+# Mild-Viking Network Monitor — web server on port 8000
 # Replaces webapp_modern.py; serves traffic dashboard only
 
 import os
@@ -19,7 +19,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR  = os.path.join(BASE_DIR, 'web')
 
 app = Flask(__name__, static_folder=WEB_DIR, static_url_path='/web')
-app.config['SECRET_KEY'] = 'ragnar-network-monitor-2025'
+app.config['SECRET_KEY'] = 'mild-viking-network-monitor-2025'
 
 socketio = SocketIO(
     app,
@@ -210,7 +210,7 @@ def run_server(shared_data=None, host='0.0.0.0', port=8000):
         target=_broadcast_loop, daemon=True, name="ws-broadcast"
     ).start()
 
-    logger.info(f"Ragnar web server starting → http://{host}:{port}")
+    logger.info(f"Mild-Viking web server starting → http://{host}:{port}")
     socketio.run(
         app,
         host=host,

@@ -1,6 +1,6 @@
 #display.py
 # Description:
-# This file, display.py, is responsible for managing the e-ink display of the Ragnar project, updating it with relevant data and statuses.
+# This file, display.py, is responsible for managing the e-ink display of the Mild-Viking project, updating it with relevant data and statuses.
 # It initializes the display, manages multiple threads for updating shared data and vulnerability counts, and handles the rendering of information
 # and images on the display.
 #
@@ -211,7 +211,7 @@ class Display:
         for url in urls:
             try:
                 start_time = time.time()
-                req = urllib.request.Request(url, headers={'User-Agent': 'RagnarSpeedTest/1.0'})
+                req = urllib.request.Request(url, headers={'User-Agent': 'MildVikingSpeedTest/1.0'})
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     total_bytes = 0
                     while total_bytes < max_bytes:
@@ -1661,7 +1661,7 @@ class Display:
 
         Layout (240×240 circle):
           ┌──────────────────────┐
-          │     RAGNAR  (title)  │  y≈8  – white, Viking font
+          │     MILD-VIKING  (title)  │  y≈8  – white, Viking font
           │   ┌──────────────┐   │
           │   │  mascot anim │   │  y≈30–175 – tinted BMP frames, animated
           │   └──────────────┘   │
@@ -2871,7 +2871,7 @@ class Display:
                     self._sleep_interruptible(current_page)
                     continue
 
-                # === PAGE_MAIN: Default Ragnar display ===
+                # === PAGE_MAIN: Default Mild-Viking display ===
                 # Scale factors spread positions across the full physical canvas
                 # For 90°/270° we render in portrait so W < H.
                 W = render_w
