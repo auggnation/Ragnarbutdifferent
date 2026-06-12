@@ -7,8 +7,8 @@ Forked from [Ragnar](https://github.com/PierreGode/Ragnar) — all offensive sec
 ## Install
 
 ```bash
-wget https://raw.githubusercontent.com/auggnation/Ragnarbutdifferent/main/install_ragnar.sh
-sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
+wget https://raw.githubusercontent.com/auggnation/Ragnarbutdifferent/main/install-mv.sh
+sudo chmod +x install-mv.sh && sudo ./install-mv.sh
 ```
 
 ## Web dashboard

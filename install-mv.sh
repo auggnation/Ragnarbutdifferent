@@ -1,8 +1,8 @@
 #!/bin/bash
 # Mild-Viking Network Monitor — Install Script
 # Usage:
-#   wget https://raw.githubusercontent.com/auggnation/Ragnarbutdifferent/main/install_ragnar.sh
-#   sudo chmod +x install_ragnar.sh && sudo ./install_ragnar.sh
+#   wget https://raw.githubusercontent.com/auggnation/Ragnarbutdifferent/main/install-mv.sh
+#   sudo chmod +x install-mv.sh && sudo ./install-mv.sh
 
 set -e
 [ -z "$BASH_VERSION" ] && exec /bin/bash "$0" "$@"

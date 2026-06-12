@@ -1569,7 +1569,7 @@ class SharedData:
 
             # Load static images from the root of staticpicdir
             self.ragnarstatusimage = None
-            self.ragnar1 = self.load_image(os.path.join(self.staticpicdir, 'ragnar1.bmp'), scale=img_scale)
+            self.ragnar1 = self.load_image(os.path.join(self.staticpicdir, 'mildviking.bmp'), scale=img_scale)
             self.port = self.load_image(os.path.join(self.staticpicdir, 'port.bmp'), scale=img_scale)
             self.frise = self.load_image(os.path.join(self.staticpicdir, 'frise.bmp'))
             self.target = self.load_image(os.path.join(self.staticpicdir, 'target.bmp'), scale=img_scale)
@@ -1640,7 +1640,7 @@ class SharedData:
                 self.x_center1 = (self.width - self.ragnar1.width) // 2
                 self.y_bottom1 = self.height - self.ragnar1.height
             else:
-                logger.warning("ragnar1.bmp image not found, using default positioning")
+                logger.warning("mildviking.bmp image not found, using default positioning")
                 self.x_center1 = self.width // 2  # Center horizontally
                 self.y_bottom1 = self.height - 20  # Default bottom position
 

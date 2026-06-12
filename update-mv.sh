@@ -97,7 +97,7 @@ chmod +x "$ragnar_PATH"/*.sh 2>/dev/null || true
 
 # Ensure specific critical scripts are executable
 chmod +x "$ragnar_PATH/kill_port_8000.sh" 2>/dev/null || true
-chmod +x "$ragnar_PATH/update_ragnar.sh" 2>/dev/null || true
+chmod +x "$ragnar_PATH/update-mv.sh" 2>/dev/null || true
 chmod +x "$ragnar_PATH/scripts/"*.sh 2>/dev/null || true
 
 echo -e "${BLUE}Step 6.5: Validating actions.json configuration...${NC}"
