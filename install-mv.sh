@@ -226,7 +226,24 @@ header "STEP 5 / 7  Network management"
 # Ensure NetworkManager is running (used for WiFi scanning/connect via web UI)
 systemctl enable NetworkManager 2>/dev/null || true
 systemctl start  NetworkManager 2>/dev/null || true
-ok "NetworkManager enabled — WiFi networks are managed via the web Settings page"
+ok "NetworkManager enabled"
+
+# Allow the service account to manage WiFi without a password prompt
+SUDOERS_FILE="/etc/sudoers.d/mild-viking-wifi"
+cat > "$SUDOERS_FILE" << 'SUDOEOF'
+# Mild-Viking: allow WiFi management and time sync without password
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/nmcli, /usr/sbin/nmcli
+mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/wpa_cli, /usr/bin/wpa_cli
+mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/wpa_passphrase, /usr/bin/wpa_passphrase
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/raspi-config
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/wpa_supplicant/wpa_supplicant.conf
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/cat /etc/wpa_supplicant/wpa_supplicant.conf
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/timedatectl, /usr/sbin/timedatectl
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart systemd-timesyncd
+SUDOEOF
+chmod 440 "$SUDOERS_FILE"
+visudo -c -f "$SUDOERS_FILE" 2>/dev/null && ok "sudoers rules installed for WiFi management" \
+    || { warn "sudoers syntax check failed — removing"; rm -f "$SUDOERS_FILE"; }
 
 # ═══════════════════════════════════════════════════════════════════
 header "STEP 6 / 7  Systemd service"

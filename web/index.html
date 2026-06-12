@@ -1172,9 +1172,30 @@ el('scan-btn').addEventListener('click', () => {
   }, 5000);
 });
 
-// ── Speedtest button — opens speedtest.net in browser ────────────
-el('speedtest-btn').addEventListener('click', () => {
-  window.open('https://www.speedtest.net/', '_blank', 'noopener,noreferrer');
+// ── Speedtest button — run on Pi; open speedtest.net if Pi has no internet ──
+el('speedtest-btn').addEventListener('click', async () => {
+  el('speedtest-btn').textContent     = '⚡ TESTING...';
+  el('speedtest-btn').style.pointerEvents = 'none';
+  const statusEl = el('speedtest-status');
+  statusEl.textContent = 'Running…';
+  statusEl.style.opacity = '1';
+  let gotResult = false;
+  try {
+    const d = await fetch('/api/speedtest', {
+      method: 'POST',
+      signal: AbortSignal.timeout(90000),
+    }).then(r => r.json());
+    if (d.dl || d.ul) {
+      gotResult = true;
+      _onSpeedtestDone(d.dl, d.ul, d.ping);
+    }
+  } catch(e) { /* fall through */ }
+  if (!gotResult) {
+    statusEl.style.opacity = '0';
+    window.open('https://www.speedtest.net/', '_blank', 'noopener,noreferrer');
+  }
+  el('speedtest-btn').textContent     = '⚡ SPEEDTEST';
+  el('speedtest-btn').style.pointerEvents = 'auto';
 });
 
 // ── Screen viewer widget toggle ────────────────────────────────────

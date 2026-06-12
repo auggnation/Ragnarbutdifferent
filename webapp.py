@@ -166,15 +166,36 @@ def api_wifi_networks():
     return jsonify({'networks': _shared_data.config.get('wifi_known_networks', [])})
 
 
+def _get_wifi_iface():
+    """Return the first wireless interface name (wlan0, wlan1, etc.)."""
+    import subprocess, os
+    try:
+        for name in os.listdir('/sys/class/net'):
+            if os.path.exists(f'/sys/class/net/{name}/wireless'):
+                return name
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(['iw', 'dev'], capture_output=True, text=True, timeout=3)
+        for line in r.stdout.splitlines():
+            if 'Interface' in line:
+                return line.split()[-1]
+    except Exception:
+        pass
+    return 'wlan0'   # sensible default
+
+
 @app.route('/api/wifi/connect', methods=['POST'])
 def api_wifi_connect():
-    """Add a WiFi network to config and connect to it immediately via nmcli."""
-    import subprocess
+    """Change the Pi's WiFi network at the OS level, trying NM then wpa_supplicant."""
+    import subprocess, shutil, os, re as _re
     data = request.get_json(silent=True) or {}
     ssid = data.get('ssid', '').strip()
     password = data.get('password', '').strip()
     if not ssid:
         return jsonify({'error': 'ssid required'}), 400
+
+    # Save credentials to app config
     if _shared_data:
         networks = _shared_data.config.get('wifi_known_networks', [])
         networks = [n for n in networks if n.get('ssid') != ssid]
@@ -182,26 +203,76 @@ def api_wifi_connect():
         _shared_data.config['wifi_known_networks'] = networks
         _shared_data.save_config()
 
-    # Attempt live connection via nmcli
+    iface  = _get_wifi_iface()
+    errors = []
+
+    # ── Method 1: nmcli (NetworkManager, default on Bookworm) ────────
+    if shutil.which('nmcli'):
+        try:
+            subprocess.run(['sudo', 'nmcli', 'device', 'set', iface, 'managed', 'yes'],
+                           capture_output=True, timeout=5)
+            cmd = ['sudo', 'nmcli', 'device', 'wifi', 'connect', ssid]
+            if password:
+                cmd += ['password', password]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                return jsonify({'status': 'connected', 'ssid': ssid})
+            errors.append((r.stderr or r.stdout).strip()[:120])
+        except Exception as exc:
+            errors.append(str(exc)[:80])
+
+    # ── Method 2: raspi-config (works on all Pi OS versions) ─────────
+    if shutil.which('raspi-config'):
+        try:
+            r = subprocess.run(
+                ['sudo', 'raspi-config', 'nonint', 'do_wifi_ssid_passphrase', ssid, password],
+                capture_output=True, text=True, timeout=20
+            )
+            if r.returncode == 0:
+                return jsonify({'status': 'connected', 'ssid': ssid})
+            errors.append('raspi-config: ' + (r.stderr or r.stdout).strip()[:80])
+        except Exception as exc:
+            errors.append('raspi-config: ' + str(exc)[:60])
+
+    # ── Method 3: edit wpa_supplicant.conf directly ───────────────────
+    wpa_conf = '/etc/wpa_supplicant/wpa_supplicant.conf'
     try:
-        if password:
-            result = subprocess.run(
-                ['nmcli', 'device', 'wifi', 'connect', ssid, 'password', password],
-                capture_output=True, text=True, timeout=30
-            )
+        r = subprocess.run(['sudo', 'cat', wpa_conf],
+                           capture_output=True, text=True, timeout=5)
+        existing = r.stdout if r.returncode == 0 else \
+                   'ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev\nupdate_config=1\ncountry=US\n'
+
+        # Generate a proper network block (hash password if wpa_passphrase available)
+        if password and shutil.which('wpa_passphrase'):
+            pr = subprocess.run(['wpa_passphrase', ssid, password],
+                                capture_output=True, text=True, timeout=5)
+            net_block = pr.stdout if pr.returncode == 0 else \
+                        f'network={{\n\tssid="{ssid}"\n\tpsk="{password}"\n}}\n'
+        elif password:
+            net_block = f'network={{\n\tssid="{ssid}"\n\tpsk="{password}"\n\tkey_mgmt=WPA-PSK\n}}\n'
         else:
-            result = subprocess.run(
-                ['nmcli', 'device', 'wifi', 'connect', ssid],
-                capture_output=True, text=True, timeout=30
-            )
-        if result.returncode == 0:
-            return jsonify({'status': 'connected', 'ssid': ssid})
-        err = result.stderr.strip() or result.stdout.strip()
-        return jsonify({'status': 'saved', 'warning': err})
-    except FileNotFoundError:
-        return jsonify({'status': 'saved', 'warning': 'nmcli not available'})
+            net_block = f'network={{\n\tssid="{ssid}"\n\tkey_mgmt=NONE\n}}\n'
+
+        # Remove any existing block for this SSID then append new one
+        cleaned = _re.sub(
+            r'network=\{[^}]*?ssid="' + _re.escape(ssid) + r'".*?\}',
+            '', existing, flags=_re.DOTALL
+        ).rstrip()
+        new_conf = cleaned + '\n' + net_block
+
+        write = subprocess.run(['sudo', 'tee', wpa_conf],
+                               input=new_conf, capture_output=True, text=True, timeout=5)
+        if write.returncode == 0:
+            subprocess.run(['sudo', 'wpa_cli', '-i', iface, 'reconfigure'],
+                           capture_output=True, timeout=10)
+            return jsonify({'status': 'connected', 'ssid': ssid,
+                            'note': 'via wpa_supplicant'})
+        errors.append('wpa_supplicant write failed')
     except Exception as exc:
-        return jsonify({'status': 'saved', 'warning': str(exc)})
+        errors.append('wpa_supplicant: ' + str(exc)[:80])
+
+    return jsonify({'status': 'saved',
+                    'warning': ' | '.join(errors) or 'Saved — may need reboot to connect'})
 
 
 @app.route('/api/settings', methods=['GET', 'POST'])
