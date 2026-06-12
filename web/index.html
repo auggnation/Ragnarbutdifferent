@@ -131,20 +131,29 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 .mv-btn.primary{border-color:currentColor;color:#fff}
 .mv-msg{font-size:10px;letter-spacing:1px;margin-top:10px;opacity:.6;min-height:14px}
 
-/* ── E-paper screen viewer (left side, toggleable) ───────────── */
-#screen-panel{
-  position:fixed;left:0;top:50%;transform:translateY(-50%) translateX(-100%);
-  z-index:18;background:rgba(0,0,0,.92);border:1px solid rgba(255,255,255,.15);
-  border-left:none;transition:transform .3s ease;pointer-events:all;
-  padding:10px;display:flex;flex-direction:column;align-items:center;gap:8px;
-  min-width:140px;
+/* ── E-paper screen viewer widget (floating left-center) ─────── */
+#screen-widget{
+  position:fixed;left:10px;top:50%;transform:translateY(-50%);
+  z-index:18;display:flex;flex-direction:column;align-items:stretch;
+  gap:4px;pointer-events:all;
 }
-#screen-panel.open{transform:translateY(-50%) translateX(0)}
+#screen-toggle-btn{
+  font-family:'Courier New',monospace;font-size:8px;letter-spacing:2px;
+  text-transform:uppercase;padding:4px 8px;
+  border:1px solid rgba(255,255,255,.2);background:rgba(0,0,0,.75);
+  color:rgba(255,255,255,.45);cursor:pointer;transition:all .2s;text-align:center;
+}
+#screen-toggle-btn:hover{border-color:rgba(255,255,255,.5);color:#fff}
+#screen-panel{
+  background:rgba(0,0,0,.92);border:1px solid rgba(255,255,255,.15);
+  padding:8px;display:flex;flex-direction:column;align-items:center;gap:6px;
+}
+#screen-panel.hidden{display:none}
 #screen-panel img{
-  image-rendering:pixelated;max-width:200px;width:100%;
+  image-rendering:pixelated;max-width:190px;width:100%;
   border:1px solid rgba(255,255,255,.1);
 }
-#screen-panel-label{font-size:8px;letter-spacing:3px;opacity:.4;text-transform:uppercase}
+#screen-panel-label{font-size:7px;letter-spacing:3px;opacity:.35;text-transform:uppercase}
 
 /* ── VLAN panel ───────────────────────────────────────────────── */
 #vlans-panel{
@@ -200,7 +209,6 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
     <button class="top-btn" id="toggle-vlans">⊟ VLANS</button>
     <button class="top-btn" id="scan-btn">⟳ RESCAN</button>
     <a class="top-btn" href="/settings">⚙ SETTINGS</a>
-    <button class="top-btn" id="screen-toggle">📺 SCREEN</button>
   </div>
 
   <!-- Center: mode label -->
@@ -257,10 +265,13 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 
 <div id="speedtest-status"></div>
 
-<!-- ── E-paper screen viewer (left side toggle) ── -->
-<div id="screen-panel">
-  <div id="screen-panel-label">DEVICE SCREEN</div>
-  <img id="screen-img" src="/web/screen.png" alt="device screen">
+<!-- ── E-paper screen viewer widget ── -->
+<div id="screen-widget">
+  <button id="screen-toggle-btn">📺 TOGGLE SCREEN</button>
+  <div id="screen-panel">
+    <div id="screen-panel-label">DEVICE SCREEN</div>
+    <img id="screen-img" src="/web/screen.png" alt="device screen">
+  </div>
 </div>
 
 <!-- ── Password gate modal ── -->
@@ -311,6 +322,69 @@ const PALETTES = {
     text:     '#ff4400',
   },
 };
+
+// ═══════════════════════════════════════════════════════════════════
+// WEATHER / TIME-OF-DAY COLOUR SYSTEM
+// ═══════════════════════════════════════════════════════════════════
+const WEATHER_PALETTES = {
+  night:    { bg:'#0d0000', primary:'#cc1500', secondary:'#880e00', accent:'#ff2200', glow:'rgba(180,15,0,',   text:'#dd2200' },
+  twilight: { bg:'#0a0400', primary:'#dd6600', secondary:'#aa3300', accent:'#ffaa00', glow:'rgba(220,90,0,',   text:'#ee7700' },
+  sunny:    { bg:'#020a00', primary:'#77dd00', secondary:'#44aa00', accent:'#aaff33', glow:'rgba(100,210,0,',  text:'#88cc11' },
+  cloudy:   { bg:'#050507', primary:'#7799aa', secondary:'#445566', accent:'#99bbcc', glow:'rgba(110,150,175,',text:'#889aaa' },
+  rain:     { bg:'#000410', primary:'#1155ee', secondary:'#003aaa', accent:'#33aaff', glow:'rgba(10,70,230,',  text:'#2266ff' },
+  snow:     { bg:'#030308', primary:'#aabbdd', secondary:'#7788bb', accent:'#ddeeff', glow:'rgba(170,190,230,',text:'#bbccee' },
+};
+
+function _weatherKey(code, isDay, now, sunrise, sunset) {
+  if (!isDay) return 'night';
+  const minsFromRise = (now - sunrise) / 60000;
+  const minsFromSet  = (sunset  - now) / 60000;
+  if (minsFromRise < 45 || minsFromSet < 45) return 'twilight';
+  const snowCodes  = [71,72,73,74,75,76,77,85,86];
+  const rainCodes  = [51,53,55,56,57,61,63,65,66,67,80,81,82,95,96,99];
+  const cloudyCodes= [2,3,45,48];
+  if (snowCodes.includes(code))  return 'snow';
+  if (rainCodes.includes(code))  return 'rain';
+  if (cloudyCodes.includes(code)) return 'cloudy';
+  return 'sunny';
+}
+
+let _currentWeatherKey = '';
+
+function _applyWeatherPalette(key) {
+  if (key === _currentWeatherKey) return;
+  _currentWeatherKey = key;
+  const wp = WEATHER_PALETTES[key];
+  // Replace the idle palette so next mode switch picks it up
+  Object.assign(PALETTES.idle, wp);
+  // If currently idle, apply immediately
+  if (mode === 'idle') { palette = PALETTES.idle; applyPalette(palette); }
+}
+
+async function fetchWeather() {
+  try {
+    let lat, lon;
+    try {
+      const pos = await new Promise((res, rej) =>
+        navigator.geolocation.getCurrentPosition(res, rej, {timeout:4000}));
+      lat = pos.coords.latitude; lon = pos.coords.longitude;
+    } catch {
+      const ip = await fetch('https://ipapi.co/json/', {signal: AbortSignal.timeout(5000)}).then(r=>r.json());
+      lat = ip.latitude; lon = ip.longitude;
+    }
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+                `&current=weather_code,is_day&daily=sunrise,sunset&timezone=auto&forecast_days=1`;
+    const w = await fetch(url, {signal: AbortSignal.timeout(8000)}).then(r=>r.json());
+    const code    = w.current?.weather_code ?? 0;
+    const isDay   = w.current?.is_day ?? 1;
+    const sunrise = new Date(w.daily?.sunrise?.[0] ?? 0);
+    const sunset  = new Date(w.daily?.sunset?.[0]  ?? 0);
+    _applyWeatherPalette(_weatherKey(code, isDay, new Date(), sunrise, sunset));
+  } catch(e) { /* silent — keep current palette */ }
+}
+
+fetchWeather();
+setInterval(fetchWeather, 30 * 60 * 1000); // refresh every 30 min
 
 // ═══════════════════════════════════════════════════════════════════
 // ANIMATION ENGINE
@@ -795,7 +869,8 @@ function updateHUD(data) {
   el('stat-uptime').textContent  = 'UP: ' + (data.uptime_human || '0s');
   el('stat-subnet').textContent  = data.subnet || data.vlan_subnets?.[0] || '—';
   if (data.speedtest_dl || data.speedtest_ul) {
-    const spdTxt = `↓${(data.speedtest_dl||0).toFixed(0)} ↑${(data.speedtest_ul||0).toFixed(0)} Mb`;
+    const at = data.speedtest_at ? ' @ ' + data.speedtest_at.slice(-5) : '';
+    const spdTxt = `↓${(data.speedtest_dl||0).toFixed(0)} ↑${(data.speedtest_ul||0).toFixed(0)} Mb${at}`;
     el('stat-speed').textContent = spdTxt;
     el('tl-speed').textContent = spdTxt;
   }
@@ -1110,14 +1185,15 @@ socket.on('speedtest_result', data => {
   }
 });
 
-// ── Screen viewer toggle ───────────────────────────────────────────
-el('screen-toggle').addEventListener('click', () => {
-  el('screen-panel').classList.toggle('open');
-  el('screen-toggle').classList.toggle('active');
+// ── Screen viewer widget toggle ────────────────────────────────────
+el('screen-toggle-btn').addEventListener('click', () => {
+  el('screen-panel').classList.toggle('hidden');
+  el('screen-toggle-btn').textContent =
+    el('screen-panel').classList.contains('hidden') ? '📺 SHOW SCREEN' : '📺 HIDE SCREEN';
 });
-// Refresh e-paper image every 3s when panel is open
+// Refresh e-paper image every 3s when panel is visible
 setInterval(() => {
-  if (el('screen-panel').classList.contains('open')) {
+  if (!el('screen-panel').classList.contains('hidden')) {
     el('screen-img').src = '/web/screen.png?t=' + Date.now();
   }
 }, 3000);

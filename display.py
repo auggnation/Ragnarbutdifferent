@@ -2946,13 +2946,28 @@ class Display:
                           font=self.shared_data.font_arialbold, fill=0)
 
                 # ════════════════════════════════════════════════════════
-                # VIKING IMAGE — fills ~half the screen below header
+                # TIME LINE — right below name/level, above Viking
                 # ════════════════════════════════════════════════════════
-                _header_h = int(H * 0.115)        # ~14 px header row
-                _img_end  = int(H * 0.60)         # image bottom edge ≈ 60% of screen
+                _header_h = int(H * 0.115)   # ~14 px — bottom of name row
+                try:
+                    from zoneinfo import ZoneInfo as _ZI
+                    _tz_name = getattr(self.shared_data, 'config', {}).get('timezone', '')
+                    _tz = _ZI(_tz_name) if _tz_name else None
+                    _now_t = datetime.now(_tz) if _tz else datetime.now()
+                except Exception:
+                    _now_t = datetime.now()
+                _time_str = _now_t.strftime('%H:%M  %a %d %b')
+                draw.text((int(4 * sx), _header_h + int(1 * sy)), _time_str,
+                          font=self.shared_data.font_arial9, fill=0)
+                _viking_start = _header_h + int(11 * sy)   # ~19 px
+
+                # ════════════════════════════════════════════════════════
+                # VIKING IMAGE — taller, starts below time line
+                # ════════════════════════════════════════════════════════
+                _img_end = int(H * 0.695)   # ~85 px (was 0.60 = 73 px)
 
                 if display_image is not None:
-                    _max_h = max(1, _img_end - _header_h)
+                    _max_h = max(1, _img_end - _viking_start)
                     _max_w = int(W * 0.90)
                     _scale = min(_max_w / max(display_image.width, 1),
                                  _max_h / max(display_image.height, 1))
@@ -2964,10 +2979,10 @@ class Display:
                         except Exception:
                             _di = display_image.resize((_iw, _ih), Image.NEAREST)
                         _cx      = (W - _di.width) // 2
-                        _paste_y = max(_header_h, _img_end - _ih)
+                        _paste_y = max(_viking_start, _img_end - _ih)
                         image.paste(_di, (_cx, _paste_y))
                 else:
-                    draw.text((int(W * 0.25), _header_h + int(4 * sy)), _title,
+                    draw.text((int(W * 0.25), _viking_start + int(4 * sy)), _title,
                               font=self.shared_data.font_arialbold, fill=0)
 
                 # ════════════════════════════════════════════════════════
@@ -2985,7 +3000,7 @@ class Display:
                     _bri   = _bd.get('rate_in', 0)
                     _bro   = _bd.get('rate_out', 0)
                     _bx    = int(W * 0.52)
-                    _by    = _header_h + int(2 * sy)
+                    _by    = _viking_start + int(2 * sy)
                     _bw    = int(W * 0.45)
                     _bh    = int(28 * sy)
                     draw.rectangle([_bx, _by, _bx + _bw, _by + _bh], fill=255, outline=0)
@@ -3003,19 +3018,21 @@ class Display:
                 _ip_str  = current_ip if current_ip else '---'
                 _net_str = current_ssid if current_ssid else (conn_type.upper() if conn_type else 'NO NET')
                 draw.text((int(4 * sx), _py), _ip_str[:22],
-                          font=self.shared_data.font_arial11, fill=0)
-                _py += int(10 * sy)
+                          font=self.shared_data.font_arial9, fill=0)
+                _py += int(9 * sy)
                 draw.text((int(4 * sx), _py), _net_str[:22],
-                          font=self.shared_data.font_arial11, fill=0)
-                _py += int(10 * sy)
-                # Speed test: show last result or placeholder
+                          font=self.shared_data.font_arial9, fill=0)
+                _py += int(9 * sy)
+                # Speed test: last result with timestamp
+                spd_at = tm_data.get('speedtest_at', '')
                 if spd_dl or spd_ul:
-                    _spd_str = f"↓{spd_dl:.0f} ↑{spd_ul:.0f} Mb"
+                    _spd_t = (' @' + spd_at[-5:]) if spd_at else ''
+                    _spd_str = f"↓{spd_dl:.0f} ↑{spd_ul:.0f}Mb{_spd_t}"
                 else:
                     _spd_str = "SPD: ---"
                 draw.text((int(4 * sx), _py), _spd_str[:22],
-                          font=self.shared_data.font_arial11, fill=0)
-                _py += int(10 * sy)
+                          font=self.shared_data.font_arial9, fill=0)
+                _py += int(9 * sy)
 
                 # ════════════════════════════════════════════════════════
                 # DIVIDER — boundary of permanent / scrolling zones
