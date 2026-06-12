@@ -190,16 +190,16 @@ info "Installing Python packages..."
 "${VENV_PATH}/bin/pip" install --upgrade pip setuptools wheel >> "$LOG_FILE" 2>&1
 
 PYTHON_PKGS=(
-    flask>=3.0.0
-    flask-socketio>=5.3.0
-    flask-cors>=4.0.0
-    psutil>=5.9.0
-    Pillow>=10.0.0
-    requests>=2.31.0
-    python-dotenv>=1.0.0
-    bcrypt>=4.0.0
-    cryptography>=41.0.0
-    netifaces>=0.11.0
+    "flask>=3.0.0"
+    "flask-socketio>=5.3.0"
+    "flask-cors>=4.0.0"
+    "psutil>=5.9.0"
+    "Pillow>=10.0.0"
+    "requests>=2.31.0"
+    "python-dotenv>=1.0.0"
+    "bcrypt>=4.0.0"
+    "cryptography>=41.0.0"
+    "netifaces>=0.11.0"
 )
 
 for pkg in "${PYTHON_PKGS[@]}"; do
