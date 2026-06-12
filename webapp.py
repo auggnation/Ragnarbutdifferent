@@ -80,6 +80,11 @@ def css_files(path):
     return send_from_directory(WEB_DIR, path)
 
 
+@app.route('/settings')
+def settings_page():
+    return send_from_directory(WEB_DIR, 'settings.html')
+
+
 # ── API routes ───────────────────────────────────────────────────────
 
 @app.route('/api/status')
@@ -116,27 +121,35 @@ def api_scan():
     return jsonify({'status': 'monitor unavailable'}), 503
 
 
+_CONFIG_SAFE_KEYS = {
+    'websrv', 'epd_type', 'screen_reversed',
+    'wifi_ap_ssid', 'wifi_ap_password',
+    'ethernet_prefer_over_wifi',
+    'wifi_known_networks', 'wifi_default_interface',
+    # Speed test settings
+    'speedtest_enabled', 'speedtest_interval_min',
+    # Email notifications
+    'notify_enabled', 'notify_email',
+    'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass',
+    'notify_on_disconnect', 'notify_on_reconnect',
+}
+
+
 @app.route('/api/config', methods=['GET', 'POST'])
 def api_config():
     if _shared_data is None:
         return jsonify({})
-    safe_keys = [
-        'websrv', 'epd_type', 'screen_reversed',
-        'wifi_ap_ssid', 'wifi_ap_password',
-        'ethernet_prefer_over_wifi',
-        'wifi_known_networks', 'wifi_default_interface',
-    ]
     if request.method == 'POST':
         data = request.get_json(silent=True) or {}
         for k, v in data.items():
-            if k in safe_keys:
+            if k in _CONFIG_SAFE_KEYS:
                 _shared_data.config[k] = v
         try:
             _shared_data.save_config()
         except Exception:
             pass
         return jsonify({'status': 'saved'})
-    return jsonify({k: _shared_data.config.get(k) for k in safe_keys})
+    return jsonify({k: _shared_data.config.get(k) for k in _CONFIG_SAFE_KEYS})
 
 
 @app.route('/api/wifi/networks')
@@ -204,6 +217,103 @@ def api_auth():
     if data.get('password', '') == pw:
         return jsonify({'status': 'ok'})
     return jsonify({'status': 'error'}), 403
+
+
+@app.route('/api/wifi/network', methods=['DELETE'])
+def api_wifi_network_delete():
+    """Remove a saved WiFi network by SSID."""
+    data = request.get_json(silent=True) or {}
+    ssid = data.get('ssid', '').strip()
+    if not ssid:
+        return jsonify({'error': 'ssid required'}), 400
+    if _shared_data:
+        nets = _shared_data.config.get('wifi_known_networks', [])
+        _shared_data.config['wifi_known_networks'] = [n for n in nets if n.get('ssid') != ssid]
+        try:
+            _shared_data.save_config()
+        except Exception:
+            pass
+    return jsonify({'status': 'removed'})
+
+
+@app.route('/api/wifi/scan')
+def api_wifi_scan():
+    """Scan for nearby WiFi networks using nmcli or iwlist."""
+    import subprocess
+    networks = []
+    try:
+        out = subprocess.check_output(
+            ['nmcli', '-t', '-f', 'SSID,SECURITY,SIGNAL', 'dev', 'wifi', 'list'],
+            stderr=subprocess.DEVNULL, timeout=10, text=True
+        )
+        seen = set()
+        for line in out.strip().splitlines():
+            parts = line.split(':', 2)
+            if len(parts) >= 1:
+                ssid = parts[0].strip()
+                if ssid and ssid not in seen:
+                    seen.add(ssid)
+                    networks.append({
+                        'ssid':     ssid,
+                        'security': parts[1].strip() if len(parts) > 1 else '',
+                        'signal':   parts[2].strip() + '%' if len(parts) > 2 else '',
+                    })
+    except Exception:
+        pass
+    return jsonify({'networks': networks})
+
+
+@app.route('/api/speedtest', methods=['POST'])
+def api_speedtest_run():
+    """Blocking speed test — runs in thread, waits up to 120s for result."""
+    import threading
+    mon = _monitor()
+    if not mon:
+        return jsonify({'error': 'monitor unavailable'}), 503
+    if getattr(mon, 'speedtest_running', False):
+        return jsonify({'error': 'already running'}), 409
+
+    done = threading.Event()
+    mon.trigger_speedtest()
+
+    def _wait():
+        for _ in range(120):
+            time.sleep(1)
+            if not getattr(mon, 'speedtest_running', False):
+                break
+        done.set()
+
+    threading.Thread(target=_wait, daemon=True).start()
+    done.wait(timeout=125)
+
+    return jsonify({
+        'dl':   getattr(mon, 'speedtest_dl',   None),
+        'ul':   getattr(mon, 'speedtest_ul',   None),
+        'ping': getattr(mon, 'speedtest_ping', None),
+        'at':   getattr(mon, 'speedtest_at',   None),
+    })
+
+
+@app.route('/api/settings/test-email', methods=['POST'])
+def api_test_email():
+    """Send a test email using configured SMTP settings."""
+    if _shared_data is None:
+        return jsonify({'error': 'server not ready'}), 503
+    cfg = _shared_data.config
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        msg = MIMEText('This is a test notification from your Mild-Viking network monitor.')
+        msg['Subject'] = '[Mild-Viking] Test notification'
+        msg['From']    = cfg.get('smtp_user', '')
+        msg['To']      = cfg.get('notify_email', '')
+        with smtplib.SMTP(cfg.get('smtp_host', ''), int(cfg.get('smtp_port', 587))) as s:
+            s.starttls()
+            s.login(cfg.get('smtp_user', ''), cfg.get('smtp_pass', ''))
+            s.send_message(msg)
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
 
 
 @app.route('/api/devices/all')

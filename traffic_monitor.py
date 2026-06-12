@@ -661,11 +661,15 @@ class TrafficMonitor:
         # Wait 90 s at startup so the network is settled before first test
         self._stop.wait(90)
         while not self._stop.is_set():
-            try:
-                self._run_speedtest()
-            except Exception as exc:
-                logger.error(f"Speed test error: {exc}")
-            self._stop.wait(self._SPEED_INTERVAL)
+            cfg = getattr(self.shared_data, 'config', {}) if self.shared_data else {}
+            if cfg.get('speedtest_enabled', True) is not False:
+                try:
+                    self._run_speedtest()
+                except Exception as exc:
+                    logger.error(f"Speed test error: {exc}")
+            interval = float(cfg.get('speedtest_interval_min', 30) or 30) * 60
+            interval = max(300.0, interval)  # floor at 5 min
+            self._stop.wait(interval)
 
     def _run_speedtest(self):
         """Run speedtest-cli and store results. Non-fatal on any failure."""

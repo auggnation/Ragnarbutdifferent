@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SETTINGS // MILD-VIKING</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#050510;color:#fff;font-family:'Courier New',monospace;min-height:100%}
+
+#header{
+  background:rgba(0,0,0,.92);border-bottom:1px solid rgba(255,255,255,.12);
+  padding:14px 24px;display:flex;align-items:center;gap:16px;
+  position:sticky;top:0;z-index:100;
+}
+#back-btn{
+  font-size:10px;letter-spacing:3px;text-transform:uppercase;
+  padding:6px 14px;border:1px solid rgba(255,255,255,.3);
+  background:transparent;color:rgba(255,255,255,.6);cursor:pointer;
+  text-decoration:none;transition:all .2s;
+}
+#back-btn:hover{border-color:#fff;color:#fff}
+#header-title{font-size:13px;letter-spacing:5px;text-transform:uppercase;opacity:.8}
+#header-conn{margin-left:auto;font-size:10px;letter-spacing:2px;opacity:.5}
+
+#content{max-width:640px;margin:0 auto;padding:24px 16px 60px}
+
+.section{border:1px solid rgba(255,255,255,.1);margin-bottom:18px}
+.section-header{
+  padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.08);
+  font-size:11px;letter-spacing:4px;text-transform:uppercase;opacity:.7;
+  background:rgba(255,255,255,.03);
+}
+.section-body{padding:16px}
+
+.field{margin-bottom:13px}
+.field:last-child{margin-bottom:0}
+.field label{display:block;font-size:9px;letter-spacing:3px;text-transform:uppercase;opacity:.5;margin-bottom:5px}
+.field input,.field select{
+  width:100%;background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.15);
+  color:#fff;font-family:'Courier New',monospace;font-size:12px;padding:8px 10px;outline:none;
+}
+.field input:focus,.field select:focus{border-color:rgba(255,255,255,.4)}
+.field select option{background:#0a0a1a}
+.field-row{display:flex;gap:10px}
+.field-row .field{flex:1}
+.field-note{font-size:9px;opacity:.38;margin-top:4px;letter-spacing:1px}
+
+.check-row{
+  display:flex;align-items:center;gap:10px;padding:7px 0;
+  font-size:11px;letter-spacing:1px;cursor:pointer;user-select:none;
+}
+.check-row input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:#3af}
+
+.btn{
+  font-family:'Courier New',monospace;font-size:10px;letter-spacing:3px;
+  text-transform:uppercase;padding:8px 20px;border:1px solid rgba(255,255,255,.3);
+  background:transparent;color:rgba(255,255,255,.7);cursor:pointer;transition:all .2s;
+}
+.btn:hover{border-color:#fff;color:#fff}
+.btn:disabled{opacity:.3;cursor:default}
+.btn.primary{border-color:#3af;color:#3af}
+.btn.primary:hover{background:rgba(51,170,255,.08)}
+
+.btn-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center}
+.msg{font-size:10px;letter-spacing:1px;min-height:16px;padding:2px 0}
+.msg.ok{color:#3f8}.msg.err{color:#f55}.msg.info{color:#fa0}
+
+.net-list{border:1px solid rgba(255,255,255,.08);margin-bottom:10px;min-height:32px}
+.net-item{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:8px 12px;border-bottom:1px solid rgba(255,255,255,.05);font-size:11px;
+}
+.net-item:last-child{border-bottom:none}
+.net-remove{cursor:pointer;opacity:.4;font-size:14px;padding:0 4px;transition:opacity .15s}
+.net-remove:hover{opacity:1;color:#f55}
+
+#scan-results{margin-top:10px;max-height:160px;overflow-y:auto;border:1px solid rgba(255,255,255,.08);display:none}
+.scan-item{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:7px 12px;border-bottom:1px solid rgba(255,255,255,.05);font-size:11px;cursor:pointer;transition:background .15s;
+}
+.scan-item:hover{background:rgba(255,255,255,.06)}
+.scan-signal{opacity:.5;font-size:10px}
+
+#speedtest-info{font-size:10px;opacity:.55;padding:8px 0;letter-spacing:1px}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <a id="back-btn" href="/">← DASHBOARD</a>
+  <div id="header-title">⚙ SETTINGS</div>
+  <div id="header-conn">Loading…</div>
+</div>
+
+<div id="content">
+
+  <!-- DEVICE -->
+  <div class="section">
+    <div class="section-header">Device</div>
+    <div class="section-body">
+      <div class="field">
+        <label>Device Name</label>
+        <input type="text" id="device-name" placeholder="MILD-VIKING" maxlength="24">
+        <div class="field-note">Shown on e-paper display and browser title</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="saveDevice()">Save Name</button>
+        <span class="msg" id="device-msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECURITY -->
+  <div class="section">
+    <div class="section-header">Security / Password Lock</div>
+    <div class="section-body">
+      <div class="field">
+        <label>Current Password (if one is set)</label>
+        <input type="password" id="cur-pw" placeholder="leave blank if none" autocomplete="current-password">
+      </div>
+      <div class="field">
+        <label>New Password</label>
+        <input type="password" id="new-pw" placeholder="new password (blank to remove)" autocomplete="new-password">
+        <div class="field-note">Leave blank to remove the password lock entirely</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="savePassword()">Save Password</button>
+        <span class="msg" id="pw-msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- WIFI -->
+  <div class="section">
+    <div class="section-header">WiFi Networks</div>
+    <div class="section-body">
+      <div id="known-nets" class="net-list">
+        <div class="net-item" style="opacity:.4">Loading…</div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>SSID</label>
+          <input type="text" id="wifi-ssid" placeholder="Network name">
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input type="password" id="wifi-pw" placeholder="Password">
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="addWifi()">Add Network</button>
+        <button class="btn" onclick="scanWifi(this)">⟳ Scan Nearby</button>
+        <span class="msg" id="wifi-msg"></span>
+      </div>
+      <div id="scan-results"></div>
+    </div>
+  </div>
+
+  <!-- SPEED TESTS -->
+  <div class="section">
+    <div class="section-header">Speed Tests</div>
+    <div class="section-body">
+      <label class="check-row">
+        <input type="checkbox" id="spd-enabled" checked>
+        <span>Enable automatic speed tests</span>
+      </label>
+      <div class="field" style="margin-top:10px">
+        <label>Interval (minutes)</label>
+        <input type="number" id="spd-interval" min="5" max="1440" value="30">
+        <div class="field-note">Minimum 5 minutes · Default 30</div>
+      </div>
+      <div id="speedtest-info"></div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="saveSpeedtest()">Save</button>
+        <button class="btn" id="spd-run-btn" onclick="runSpeedtest(this)">⚡ Run Now</button>
+        <span class="msg" id="spd-msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- EMAIL NOTIFICATIONS -->
+  <div class="section">
+    <div class="section-header">Email Notifications</div>
+    <div class="section-body">
+      <label class="check-row">
+        <input type="checkbox" id="notify-on">
+        <span>Enable email notifications</span>
+      </label>
+      <div class="field" style="margin-top:10px">
+        <label>Send alerts to (recipient email)</label>
+        <input type="email" id="notify-to" placeholder="you@example.com">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>SMTP Server</label>
+          <input type="text" id="smtp-host" placeholder="smtp.gmail.com">
+        </div>
+        <div class="field" style="max-width:90px">
+          <label>Port</label>
+          <input type="number" id="smtp-port" value="587" min="1" max="65535">
+        </div>
+      </div>
+      <div class="field">
+        <label>SMTP Username</label>
+        <input type="email" id="smtp-user" placeholder="sender@gmail.com">
+      </div>
+      <div class="field">
+        <label>SMTP Password / App Password</label>
+        <input type="password" id="smtp-pass" placeholder="app-specific password">
+        <div class="field-note">Gmail: use an App Password — not your main password</div>
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="notify-disc">
+        <span>Alert when network disconnects</span>
+      </label>
+      <label class="check-row">
+        <input type="checkbox" id="notify-rec">
+        <span>Alert when network reconnects</span>
+      </label>
+      <div class="btn-row">
+        <button class="btn primary" onclick="saveNotify()">Save</button>
+        <button class="btn" onclick="testEmail(this)">📧 Send Test</button>
+        <span class="msg" id="notify-msg"></span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+'use strict';
+
+function msg(id, text, type) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'msg ' + (type || '');
+  if (type === 'ok') setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 3000);
+}
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok && r.status !== 403) throw new Error(r.status);
+  return r.json();
+}
+
+// ── LOAD ─────────────────────────────────────────────────────────
+async function loadAll() {
+  try {
+    const [s, c, st] = await Promise.all([
+      api('/api/settings'),
+      api('/api/config'),
+      api('/api/status'),
+    ]);
+
+    document.getElementById('device-name').value = s.device_name || 'MILD-VIKING';
+    document.title = (s.device_name || 'MILD-VIKING') + ' // SETTINGS';
+    document.getElementById('header-conn').textContent =
+      (st.connection_type || 'unknown').toUpperCase() + ' · ' + (st.current_ip || '—');
+
+    document.getElementById('spd-enabled').checked  = c.speedtest_enabled !== false;
+    document.getElementById('spd-interval').value   = c.speedtest_interval_min || 30;
+
+    if (st.speedtest_dl || st.speedtest_ul) {
+      document.getElementById('speedtest-info').textContent =
+        `Last: ↓${(st.speedtest_dl||0).toFixed(1)} ↑${(st.speedtest_ul||0).toFixed(1)} Mb` +
+        (st.speedtest_ping ? `  ${st.speedtest_ping.toFixed(0)}ms` : '') +
+        (st.speedtest_at ? `  @ ${st.speedtest_at}` : '');
+    }
+
+    document.getElementById('notify-on').checked   = !!c.notify_enabled;
+    document.getElementById('notify-to').value     = c.notify_email  || '';
+    document.getElementById('smtp-host').value     = c.smtp_host     || '';
+    document.getElementById('smtp-port').value     = c.smtp_port     || 587;
+    document.getElementById('smtp-user').value     = c.smtp_user     || '';
+    document.getElementById('notify-disc').checked = c.notify_on_disconnect !== false;
+    document.getElementById('notify-rec').checked  = c.notify_on_reconnect  !== false;
+
+    loadNets();
+  } catch(e) {
+    console.error('loadAll:', e);
+  }
+}
+
+async function loadNets() {
+  try {
+    const d = await api('/api/wifi/networks');
+    const nets = d.networks || [];
+    const box = document.getElementById('known-nets');
+    if (!nets.length) {
+      box.innerHTML = '<div class="net-item" style="opacity:.4">No saved networks</div>';
+      return;
+    }
+    box.innerHTML = nets.map(n =>
+      `<div class="net-item">
+        <span>${escHtml(n.ssid)}</span>
+        <span class="net-remove" onclick="removeNet('${escJs(n.ssid)}')">✕</span>
+      </div>`
+    ).join('');
+  } catch(e) {}
+}
+
+// ── DEVICE ───────────────────────────────────────────────────────
+async function saveDevice() {
+  const name = document.getElementById('device-name').value.trim() || 'MILD-VIKING';
+  try {
+    const d = await api('/api/settings', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({device_name: name, current_password:''}),
+    });
+    if (d.error) msg('device-msg', '✗ ' + d.error, 'err');
+    else { msg('device-msg', '✓ Saved', 'ok'); document.title = name + ' // SETTINGS'; }
+  } catch(e) { msg('device-msg', '✗ Error saving', 'err'); }
+}
+
+// ── PASSWORD ─────────────────────────────────────────────────────
+async function savePassword() {
+  const curPw = document.getElementById('cur-pw').value;
+  const newPw = document.getElementById('new-pw').value;
+  try {
+    const d = await api('/api/settings', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({current_password: curPw, dashboard_password: newPw}),
+    });
+    if (d.error) msg('pw-msg', '✗ ' + d.error, 'err');
+    else {
+      msg('pw-msg', newPw ? '✓ Password set' : '✓ Password removed', 'ok');
+      document.getElementById('cur-pw').value = '';
+      document.getElementById('new-pw').value = '';
+      localStorage.setItem('mv_authed', '1');
+    }
+  } catch(e) { msg('pw-msg', '✗ Error saving', 'err'); }
+}
+
+// ── WIFI ─────────────────────────────────────────────────────────
+async function addWifi() {
+  const ssid = document.getElementById('wifi-ssid').value.trim();
+  const pw   = document.getElementById('wifi-pw').value;
+  if (!ssid) { msg('wifi-msg', '✗ SSID required', 'err'); return; }
+  try {
+    const d = await api('/api/wifi/connect', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ssid, password: pw}),
+    });
+    if (d.error) msg('wifi-msg', '✗ ' + d.error, 'err');
+    else {
+      msg('wifi-msg', '✓ Saved', 'ok');
+      document.getElementById('wifi-ssid').value = '';
+      document.getElementById('wifi-pw').value = '';
+      loadNets();
+    }
+  } catch(e) { msg('wifi-msg', '✗ Error', 'err'); }
+}
+
+async function removeNet(ssid) {
+  try {
+    await api('/api/wifi/network', {
+      method:'DELETE', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ssid}),
+    });
+    loadNets();
+  } catch(e) {}
+}
+
+async function scanWifi(btn) {
+  btn.textContent = '⟳ Scanning…';
+  btn.disabled = true;
+  const box = document.getElementById('scan-results');
+  box.style.display = 'block';
+  box.innerHTML = '<div class="scan-item" style="opacity:.4">Scanning…</div>';
+  try {
+    const d = await api('/api/wifi/scan');
+    const nets = d.networks || [];
+    if (!nets.length) {
+      box.innerHTML = '<div class="scan-item" style="opacity:.4">No networks found</div>';
+    } else {
+      box.innerHTML = nets.map(n =>
+        `<div class="scan-item" onclick="pickNet('${escJs(n.ssid)}')">
+          <span>${escHtml(n.ssid)}</span>
+          <span class="scan-signal">${escHtml(n.security||'')} ${escHtml(n.signal||'')}</span>
+        </div>`
+      ).join('');
+    }
+  } catch(e) {
+    box.innerHTML = '<div class="scan-item" style="opacity:.4">Scan unavailable</div>';
+  } finally {
+    btn.textContent = '⟳ Scan Nearby';
+    btn.disabled = false;
+  }
+}
+
+function pickNet(ssid) {
+  document.getElementById('wifi-ssid').value = ssid;
+  document.getElementById('wifi-pw').focus();
+  document.getElementById('scan-results').style.display = 'none';
+}
+
+// ── SPEED TESTS ──────────────────────────────────────────────────
+async function saveSpeedtest() {
+  const payload = {
+    speedtest_enabled:     document.getElementById('spd-enabled').checked,
+    speedtest_interval_min: Math.max(5, parseInt(document.getElementById('spd-interval').value) || 30),
+  };
+  try {
+    const d = await api('/api/config', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    msg('spd-msg', d.status === 'saved' ? '✓ Saved' : '✗ Error', d.status === 'saved' ? 'ok' : 'err');
+  } catch(e) { msg('spd-msg', '✗ Error', 'err'); }
+}
+
+async function runSpeedtest(btn) {
+  msg('spd-msg', '⚡ Running… (~60s)', 'info');
+  btn.disabled = true;
+  try {
+    const d = await api('/api/speedtest', {method:'POST'});
+    if (d.dl !== undefined) {
+      document.getElementById('speedtest-info').textContent =
+        `Last: ↓${d.dl.toFixed(1)} ↑${d.ul.toFixed(1)} Mb` +
+        (d.ping ? `  ${d.ping.toFixed(0)}ms` : '');
+      msg('spd-msg', '✓ Done', 'ok');
+    } else {
+      msg('spd-msg', d.error || '✗ Failed', 'err');
+    }
+  } catch(e) { msg('spd-msg', '✗ Error', 'err'); }
+  finally    { btn.disabled = false; }
+}
+
+// ── NOTIFICATIONS ─────────────────────────────────────────────────
+async function saveNotify() {
+  const payload = {
+    notify_enabled:       document.getElementById('notify-on').checked,
+    notify_email:         document.getElementById('notify-to').value.trim(),
+    smtp_host:            document.getElementById('smtp-host').value.trim(),
+    smtp_port:            parseInt(document.getElementById('smtp-port').value) || 587,
+    smtp_user:            document.getElementById('smtp-user').value.trim(),
+    smtp_pass:            document.getElementById('smtp-pass').value,
+    notify_on_disconnect: document.getElementById('notify-disc').checked,
+    notify_on_reconnect:  document.getElementById('notify-rec').checked,
+  };
+  try {
+    const d = await api('/api/config', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    msg('notify-msg', d.status === 'saved' ? '✓ Saved' : '✗ Error', d.status === 'saved' ? 'ok' : 'err');
+  } catch(e) { msg('notify-msg', '✗ Error', 'err'); }
+}
+
+async function testEmail(btn) {
+  msg('notify-msg', '📧 Sending…', 'info');
+  btn.disabled = true;
+  try {
+    const d = await api('/api/settings/test-email', {method:'POST'});
+    msg('notify-msg', d.status === 'ok' ? '✓ Email sent!' : '✗ ' + (d.error || 'Failed'),
+        d.status === 'ok' ? 'ok' : 'err');
+  } catch(e) { msg('notify-msg', '✗ Error', 'err'); }
+  finally    { btn.disabled = false; }
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escJs(s) {
+  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+
+loadAll();
+</script>
+</body>
+</html>
