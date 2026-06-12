@@ -216,18 +216,28 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
   </div>
 </div>
 
-<!-- ── Devices panel ── -->
+<!-- ── Devices panel (right slide-in) ── -->
 <div id="devices-panel">
   <div id="devices-header">
-    <span>NETWORK DEVICES</span>
+    <span id="devices-header-count">NETWORK DEVICES</span>
     <span id="devices-close">✕</span>
   </div>
   <div id="devices-list"></div>
 </div>
 
+<!-- ── VLANs panel (left slide-in) ── -->
+<div id="vlans-panel">
+  <div id="vlans-header">
+    <span>VLANS / SUBNETS</span>
+    <span id="vlans-close">✕</span>
+  </div>
+  <div id="vlans-list"></div>
+</div>
+
 <!-- ── Corner buttons ── -->
 <button id="scan-btn">⟳ SCAN</button>
 <button id="toggle-devices">⊞ DEVICES</button>
+<button id="toggle-vlans">⊟ VLANS</button>
 
 <script>
 'use strict';
@@ -767,13 +777,14 @@ function updateHUD(data) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// DEVICES PANEL
+// DEVICES + VLANS PANELS
 // ═══════════════════════════════════════════════════════════════════
 
-function updateDevices(devices) {
+function updateDevices(devices, count) {
   const list = el('devices-list');
+  el('devices-header-count').textContent = `DEVICES (${count || 0})`;
   if (!devices || !devices.length) {
-    list.innerHTML = '<div class="device-item" style="opacity:.4">No devices found</div>';
+    list.innerHTML = '<div class="device-item" style="opacity:.4">Scanning…</div>';
     return;
   }
   list.innerHTML = devices.map(d => `
@@ -785,12 +796,49 @@ function updateDevices(devices) {
   `).join('');
 }
 
+function updateVlans(vlans, subnet, gateway) {
+  const list = el('vlans-list');
+  const nets = vlans && vlans.length ? vlans : (subnet ? [subnet] : []);
+  if (!nets.length) {
+    list.innerHTML = '<div class="vlan-item" style="opacity:.4">No subnets found</div>';
+    return;
+  }
+  list.innerHTML = nets.map(n => `<div class="vlan-item">${n}</div>`).join('');
+  if (gateway) {
+    list.innerHTML += `<div class="vlan-item" style="opacity:.5;margin-top:8px">GW: ${gateway}</div>`;
+  }
+}
+
 el('toggle-devices').addEventListener('click', () => {
+  el('vlans-panel').classList.remove('open');
   el('devices-panel').classList.toggle('open');
 });
 el('devices-close').addEventListener('click', () => {
   el('devices-panel').classList.remove('open');
 });
+el('toggle-vlans').addEventListener('click', () => {
+  el('devices-panel').classList.remove('open');
+  el('vlans-panel').classList.toggle('open');
+});
+el('vlans-close').addEventListener('click', () => {
+  el('vlans-panel').classList.remove('open');
+});
+
+// Auto-cycle panels every 15 s: open devices → open vlans → close both
+let _panelCycle = 0;
+setInterval(() => {
+  _panelCycle = (_panelCycle + 1) % 3;
+  if (_panelCycle === 1) {
+    el('vlans-panel').classList.remove('open');
+    el('devices-panel').classList.add('open');
+  } else if (_panelCycle === 2) {
+    el('devices-panel').classList.remove('open');
+    el('vlans-panel').classList.add('open');
+  } else {
+    el('devices-panel').classList.remove('open');
+    el('vlans-panel').classList.remove('open');
+  }
+}, 15000);
 
 // ═══════════════════════════════════════════════════════════════════
 // SOCKET.IO CONNECTION
@@ -815,9 +863,8 @@ socket.on('disconnect', () => {
 socket.on('status_update', data => {
   updateHUD(data);
   if (data.devices && data.devices.length) {
-    updateDevices(data.devices);
-    el('devices-header').querySelector('span').textContent =
-      'NETWORK DEVICES (' + data.device_count + ')';
+    updateDevices(data.devices, data.device_count);
+    updateVlans(data.vlan_subnets, data.subnet, data.gateway_ip);
   }
 });
 
