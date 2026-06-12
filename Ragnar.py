@@ -16,11 +16,11 @@ from logger import Logger
 from wifi_manager import WiFiManager
 from env_manager import load_env
 
-logger = Logger(name="Ragnar.py", level=logging.DEBUG)
+logger = Logger(name="mild-viking", level=logging.DEBUG)
 
 
-class Ragnar:
-    """Main class for Ragnar Network Traffic Monitor."""
+class MildViking:
+    """Main class for Mild-Viking Network Traffic Monitor."""
 
     def __init__(self, shared_data):
         self.shared_data = shared_data
@@ -33,7 +33,7 @@ class Ragnar:
     def run(self):
         """Main loop — starts traffic monitor and WiFi, then keeps running."""
         logger.info("=" * 70)
-        logger.info("RAGNAR NETWORK MONITOR STARTING")
+        logger.info("MILD-VIKING NETWORK MONITOR STARTING")
         logger.info("=" * 70)
 
         # Start traffic monitor
@@ -52,18 +52,18 @@ class Ragnar:
         logger.info("Wi-Fi management system started")
 
         # Main loop
-        logger.info("Ragnar main loop running...")
+        logger.info("Mild-Viking main loop running...")
         while not self.shared_data.should_exit:
             for _ in range(10):
                 if self.shared_data.should_exit:
                     break
                 time.sleep(1)
 
-        logger.info("Ragnar main loop exited")
+        logger.info("Mild-Viking main loop exited")
 
     def stop(self):
         """Stop all components gracefully."""
-        logger.info("Stopping Ragnar...")
+        logger.info("Stopping Mild-Viking...")
         if self.traffic_monitor:
             self.traffic_monitor.stop()
         if hasattr(self, 'wifi_manager'):
@@ -71,7 +71,7 @@ class Ragnar:
         self.shared_data.should_exit = True
         self.shared_data.display_should_exit = True
         self.shared_data.webapp_should_exit = True
-        logger.info("Ragnar stopped")
+        logger.info("Mild-Viking stopped")
 
     @staticmethod
     def start_display():
@@ -118,7 +118,7 @@ def handle_exit(sig, frame, display_thread, ragnar_thread, web_thread):
 
 if __name__ == "__main__":
     load_env()
-    logger.info("Starting Ragnar Network Monitor")
+    logger.info("Starting Mild-Viking Network Monitor")
 
     try:
         logger.info("Loading configuration...")
@@ -143,11 +143,11 @@ if __name__ == "__main__":
         # Start e-paper display
         logger.info("Starting display thread...")
         shared_data.display_should_exit = False
-        display_thread = Ragnar.start_display()
+        display_thread = MildViking.start_display()
 
-        # Start main Ragnar thread
-        logger.info("Starting Ragnar thread...")
-        ragnar = Ragnar(shared_data)
+        # Start main Mild-Viking thread
+        logger.info("Starting Mild-Viking thread...")
+        ragnar = MildViking(shared_data)
         shared_data.ragnar_instance = ragnar
 
         if display_thread and hasattr(shared_data, 'display_instance'):
