@@ -419,8 +419,14 @@ async function addWifi() {
       body: JSON.stringify({ssid, password: pw}),
     });
     if (d.error) msg('wifi-msg', '✗ ' + d.error, 'err');
-    else {
-      msg('wifi-msg', '✓ Saved', 'ok');
+    else if (d.status === 'connected') {
+      msg('wifi-msg', '✓ Connected to ' + d.ssid, 'ok');
+      document.getElementById('wifi-ssid').value = '';
+      document.getElementById('wifi-pw').value = '';
+      loadNets();
+    } else {
+      const warn = d.warning ? ' — ' + d.warning : '';
+      msg('wifi-msg', '✓ Saved (not connected' + warn + ')', 'ok');
       document.getElementById('wifi-ssid').value = '';
       document.getElementById('wifi-pw').value = '';
       loadNets();
