@@ -726,24 +726,21 @@ class TrafficMonitor:
             self._stop.wait(interval)
 
     def _run_speedtest(self):
-        """Run a speed test. Tries Python module first, then CLI fallback."""
+        """Run a speed test. Tries speedtest module, CLI, then urllib fallback."""
         dl = ul = ping = 0.0
 
-        # --- Method 1: Python speedtest module (most reliable) ---
+        # Method 1: Python speedtest module
         try:
             import speedtest as _st
             s = _st.Speedtest(secure=True)
             s.get_best_server()
-            dl   = s.download() / 1_000_000   # bps → Mbps
+            dl   = s.download() / 1_000_000
             ul   = s.upload()   / 1_000_000
             ping = s.results.ping
         except ImportError:
-            # --- Method 2: speedtest-cli subprocess ---
-            cmds = [
-                ['speedtest-cli', '--simple', '--secure'],
-                ['python3', '-m', 'speedtest', '--simple', '--secure'],
-            ]
-            for cmd in cmds:
+            # Method 2: speedtest-cli / python3 -m speedtest subprocess
+            for cmd in (['speedtest-cli', '--simple', '--secure'],
+                        ['python3', '-m', 'speedtest', '--simple', '--secure']):
                 try:
                     r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
                     for line in r.stdout.splitlines():
@@ -759,20 +756,37 @@ class TrafficMonitor:
                             if m: ping = float(m.group(1))
                     if dl > 0 or ul > 0:
                         break
-                    if r.returncode != 0:
-                        logger.warning(f"speedtest cmd {cmd[0]} failed: {r.stderr.strip()!r}")
                 except FileNotFoundError:
                     continue
-                except Exception as exc:
-                    logger.warning(f"speedtest cmd {cmd[0]} error: {exc}")
+                except Exception:
                     continue
-            else:
-                if not (dl > 0 or ul > 0):
-                    logger.warning("speedtest-cli not found — install: pip3 install speedtest-cli")
-                    return
+
+            # Method 3: urllib download timing — no external deps needed
+            if not (dl > 0 or ul > 0):
+                try:
+                    import urllib.request
+                    # 10 MB Cloudflare test file
+                    req = urllib.request.Request(
+                        'https://speed.cloudflare.com/__down?bytes=10000000',
+                        headers={'User-Agent': 'mild-viking-speedtest/1.0'}
+                    )
+                    t0 = time.monotonic()
+                    with urllib.request.urlopen(req, timeout=40) as resp:
+                        chunk_size = 65536
+                        received   = 0
+                        while True:
+                            chunk = resp.read(chunk_size)
+                            if not chunk:
+                                break
+                            received += len(chunk)
+                    elapsed = time.monotonic() - t0
+                    if elapsed > 0 and received > 0:
+                        dl = (received * 8) / elapsed / 1_000_000  # Mbps
+                        logger.info(f"Speed test (urllib fallback): ↓{dl:.1f} Mbps")
+                except Exception as exc:
+                    logger.warning(f"urllib speedtest fallback failed: {exc}")
         except Exception as exc:
             logger.warning(f"Speed test failed: {exc}")
-            return
 
         if dl > 0 or ul > 0:
             with self._lock:
@@ -782,7 +796,7 @@ class TrafficMonitor:
                 self.speedtest_at   = time.strftime('%H:%M')
             logger.info(f"Speed test: ↓{dl:.1f} ↑{ul:.1f} Mbps  ping {ping:.0f}ms")
         else:
-            logger.warning("Speed test returned zero results — check network connectivity")
+            logger.warning("Speed test returned zero results")
 
     # ── Public API ────────────────────────────────────────────────────
 
