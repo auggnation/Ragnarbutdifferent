@@ -91,6 +91,9 @@ class TrafficMonitor:
         self.subnet = ""
         self.vlan_subnets = []
 
+        # Per-device traffic attribution (ip → {connections, bytes_in, bytes_out, rate_in, rate_out})
+        self._dev_traffic = {}
+
         # Speed test results
         self.speedtest_dl   = 0.0   # Mbps download
         self.speedtest_ul   = 0.0   # Mbps upload
@@ -185,6 +188,10 @@ class TrafficMonitor:
                 if now - self._last_info_update >= self._INFO_INTERVAL:
                     self._probe_network_info()
                     self._last_info_update = now
+
+                # Attribute traffic to devices every 5 s
+                if int(now) % 5 == 0:
+                    self._attribute_device_traffic(sr, rr)
 
             except Exception as exc:
                 logger.error(f"Traffic loop error: {exc}")
@@ -486,6 +493,86 @@ class TrafficMonitor:
 
         return []
 
+    # ── Per-device traffic attribution ───────────────────────────────
+
+    def _get_active_connections(self):
+        """Return {remote_ip: connection_count} for active TCP connections."""
+        counts = {}
+        # Try ss first (fast, available on most Linux)
+        try:
+            r = subprocess.run(
+                ['ss', '-tn', 'state', 'established'],
+                capture_output=True, text=True, timeout=3
+            )
+            for line in r.stdout.splitlines()[1:]:
+                parts = line.split()
+                if len(parts) >= 5:
+                    peer = parts[4]
+                    ip = re.sub(r':\d+$', '', peer)
+                    ip = ip.strip('[]')  # strip IPv6 brackets
+                    if ip and not ip.startswith('127.') and ip != '::1':
+                        counts[ip] = counts.get(ip, 0) + 1
+            return counts
+        except Exception:
+            pass
+        # Fallback: parse /proc/net/tcp
+        try:
+            for fname in ('/proc/net/tcp', '/proc/net/tcp6'):
+                try:
+                    with open(fname) as f:
+                        for line in f.readlines()[1:]:
+                            cols = line.split()
+                            if len(cols) < 4 or cols[3] != '01':  # 01 = ESTABLISHED
+                                continue
+                            remote_hex = cols[2]
+                            if ':' in remote_hex:
+                                ip_hex, port_hex = remote_hex.rsplit(':', 1)
+                            else:
+                                continue
+                            try:
+                                ip_int = int(ip_hex, 16)
+                                ip = f"{ip_int & 0xff}.{(ip_int >> 8) & 0xff}.{(ip_int >> 16) & 0xff}.{(ip_int >> 24) & 0xff}"
+                                if not ip.startswith('127.') and ip != '0.0.0.0':
+                                    counts[ip] = counts.get(ip, 0) + 1
+                            except Exception:
+                                pass
+                except FileNotFoundError:
+                    pass
+        except Exception:
+            pass
+        return counts
+
+    def _attribute_device_traffic(self, recv_rate, sent_rate):
+        """Distribute current interface rates across known devices by connection count."""
+        conn_counts = self._get_active_connections()
+        with self._lock:
+            known_ips = {d['ip'] for d in self.devices}
+
+        # Merge: known devices get at least 0 connections
+        all_ips = known_ips | set(conn_counts.keys())
+        if not all_ips:
+            return
+
+        total_conns = sum(conn_counts.get(ip, 0) for ip in all_ips) or 1
+        uniform_share = 1.0 / len(all_ips)
+
+        updated = {}
+        for ip in all_ips:
+            conns = conn_counts.get(ip, 0)
+            # Weight: 70% by connection share, 30% uniform — so idle devices get a tiny slice
+            weight = 0.7 * (conns / total_conns) + 0.3 * uniform_share
+            prev = self._dev_traffic.get(ip, {})
+            # Smooth with simple EMA (α=0.3)
+            alpha = 0.3
+            prev_in  = prev.get('rate_in', 0.0)
+            prev_out = prev.get('rate_out', 0.0)
+            updated[ip] = {
+                'connections': conns,
+                'rate_in':  alpha * recv_rate * weight + (1 - alpha) * prev_in,
+                'rate_out': alpha * sent_rate * weight + (1 - alpha) * prev_out,
+            }
+        self._dev_traffic = updated
+
     # ── Speed test ────────────────────────────────────────────────────
 
     def _speedtest_loop(self):
@@ -563,12 +650,27 @@ class TrafficMonitor:
                 'device_count': self.device_count,
                 'subnet': self.subnet,
                 'vlan_subnets': list(self.vlan_subnets),
-                'devices': self.devices[:50],
+                'devices': self._enrich_devices(self.devices[:50]),
                 'speedtest_dl': self.speedtest_dl,
                 'speedtest_ul': self.speedtest_ul,
                 'speedtest_ping': self.speedtest_ping,
                 'speedtest_at': self.speedtest_at,
             }
+
+    def _enrich_devices(self, devices):
+        """Attach per-device traffic data to the device list."""
+        result = []
+        for d in devices:
+            ip = d.get('ip', '')
+            t = self._dev_traffic.get(ip, {})
+            result.append({**d,
+                'connections': t.get('connections', 0),
+                'rate_in':  round(t.get('rate_in', 0.0), 1),
+                'rate_out': round(t.get('rate_out', 0.0), 1),
+                'rate_in_human':  _fmt_bps(t.get('rate_in', 0.0)),
+                'rate_out_human': _fmt_bps(t.get('rate_out', 0.0)),
+            })
+        return result
 
     def trigger_scan(self):
         """Force an immediate device scan in a background thread."""
