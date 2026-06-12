@@ -2948,7 +2948,7 @@ class Display:
                 # ════════════════════════════════════════════════════════
                 # TIME LINE — right below name/level, above Viking
                 # ════════════════════════════════════════════════════════
-                _header_h = int(H * 0.082)   # ~10 px — compact name row
+                _header_h = int(H * 0.066)   # ~8 px — tight name row
                 try:
                     from zoneinfo import ZoneInfo as _ZI
                     _tz_name = getattr(self.shared_data, 'config', {}).get('timezone', '')
@@ -2959,12 +2959,13 @@ class Display:
                 _time_str = _now_t.strftime('%H:%M  %a %d %b')
                 draw.text((int(4 * sx), _header_h + int(1 * sy)), _time_str,
                           font=self.shared_data.font_arial9, fill=0)
-                _viking_start = _header_h + int(8 * sy)   # ~14 px (moved up ~5 px)
+                _viking_start = _header_h + int(5 * sy)   # ~10 px
 
                 # ════════════════════════════════════════════════════════
-                # VIKING IMAGE — same height, shifted up ~5 px
+                # VIKING IMAGE — same 66 px tall, shifted up 1 line
                 # ════════════════════════════════════════════════════════
-                _img_end = int(H * 0.655)   # ~80 px (was 0.695 = 85 px)
+                _img_end  = int(H * 0.623)   # ~76 px (Viking: 10→76 = 66 px)
+                _paste_y  = _viking_start     # fallback if no image
 
                 if display_image is not None:
                     _max_h = max(1, _img_end - _viking_start)
@@ -2978,7 +2979,7 @@ class Display:
                             _di = display_image.resize((_iw, _ih), Image.Resampling.LANCZOS)
                         except Exception:
                             _di = display_image.resize((_iw, _ih), Image.NEAREST)
-                        _cx      = (W - _di.width) // 2
+                        _cx     = (W - _di.width) // 2
                         _paste_y = max(_viking_start, _img_end - _ih)
                         image.paste(_di, (_cx, _paste_y))
                 else:
@@ -2986,7 +2987,7 @@ class Display:
                               font=self.shared_data.font_arialbold, fill=0)
 
                 # ════════════════════════════════════════════════════════
-                # CHAT BUBBLE — random device info, 5 s every 30 s
+                # CHAT BUBBLE — at helmet level, last IP octet + last 4 MAC + rates
                 # ════════════════════════════════════════════════════════
                 _tick = int(time.time()) % 30
                 if _tick >= 20 and devices:
@@ -2994,22 +2995,23 @@ class Display:
                         self._bubble_idx = 0
                     if _tick == 20:
                         self._bubble_idx = (self._bubble_idx + 1) % max(1, len(devices))
-                    _bd    = devices[self._bubble_idx % len(devices)]
-                    _bhost = (_bd.get('hostname') or _bd.get('ip', '?'))[:14]
-                    _bmac  = (_bd.get('mac') or '')[:11]
-                    _bri   = _bd.get('rate_in', 0)
-                    _bro   = _bd.get('rate_out', 0)
-                    _bx    = int(W * 0.52)
-                    _by    = _viking_start + int(2 * sy)
-                    _bw    = int(W * 0.45)
-                    _bh    = int(28 * sy)
+                    _bd   = devices[self._bubble_idx % len(devices)]
+                    _bip  = _bd.get('ip', '').split('.')[-1]                  # last octet
+                    _bmac = (_bd.get('mac') or '').replace(':', '')[-4:].upper()  # last 4 hex
+                    _bri  = _bd.get('rate_in', 0)
+                    _bro  = _bd.get('rate_out', 0)
+                    _bx   = int(W * 0.46)
+                    _by   = _paste_y + int(1 * sy)    # anchored to actual helmet top
+                    _bw   = int(W * 0.51)
+                    _bh   = int(22 * sy)              # 2-line bubble
                     draw.rectangle([_bx, _by, _bx + _bw, _by + _bh], fill=255, outline=0)
-                    draw.polygon([(_bx - 1, _by + 4), (_bx - 5, _by + 9),
-                                  (_bx - 1, _by + 14)], fill=255, outline=0)
-                    for _bi, _bl in enumerate([_bhost, _bmac,
-                                               f"↓{_rfmt(_bri)} ↑{_rfmt(_bro)}"]):
-                        draw.text((_bx + 2, _by + 2 + _bi * int(9 * sy)), _bl,
-                                  font=self.shared_data.font_arial9, fill=0)
+                    draw.polygon([(_bx - 1, _by + 2), (_bx - 5, _by + 6),
+                                  (_bx - 1, _by + 10)], fill=255, outline=0)
+                    draw.text((_bx + 2, _by + 2),
+                              f'.{_bip}  {_bmac}', font=self.shared_data.font_arial9, fill=0)
+                    draw.text((_bx + 2, _by + 2 + int(9 * sy)),
+                              f'↓{_rfmt(_bri)} ↑{_rfmt(_bro)}',
+                              font=self.shared_data.font_arial9, fill=0)
 
                 # ════════════════════════════════════════════════════════
                 # PERMANENT: IP + network + speed test — below Viking's feet
