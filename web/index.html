@@ -31,16 +31,25 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 #level-num{font-size:28px;font-weight:700;letter-spacing:2px;line-height:1;text-shadow:0 0 12px currentColor}
 #level-bar-wrap{width:80px;height:4px;background:rgba(255,255,255,.1);border-radius:2px;margin-top:3px;overflow:hidden}
 #level-bar{height:100%;border-radius:2px;transition:width .5s ease;box-shadow:0 0 6px currentColor}
-#level-speed-display{font-size:9px;letter-spacing:1px;opacity:.55;margin-top:5px;text-align:center;font-variant-numeric:tabular-nums;min-height:13px}
-#level-actions{display:flex;gap:5px;margin-top:6px;pointer-events:all}
-.lv-btn{
-  font-family:'Courier New',monospace;font-size:8px;letter-spacing:2px;text-transform:uppercase;
-  padding:3px 8px;border:1px solid rgba(255,255,255,.22);
-  background:rgba(0,0,0,.5);color:rgba(255,255,255,.5);
-  cursor:pointer;text-decoration:none;display:inline-block;
-  transition:all .2s;
+/* ── Top-left action panel (outside HUD — always clickable) ──── */
+#tl-panel{
+  position:fixed;left:14px;top:82px;z-index:20;
+  display:flex;flex-direction:column;align-items:flex-start;gap:5px;
+  pointer-events:all;
 }
-.lv-btn:hover{border-color:rgba(255,255,255,.6);color:#fff}
+#tl-speed{
+  font-size:9px;letter-spacing:1px;opacity:.6;min-height:12px;
+  font-family:'Courier New',monospace;
+}
+.tl-btn{
+  font-family:'Courier New',monospace;font-size:9px;letter-spacing:2px;
+  text-transform:uppercase;padding:5px 12px;
+  border:1px solid rgba(255,255,255,.25);
+  background:rgba(0,0,0,.55);color:rgba(255,255,255,.55);
+  cursor:pointer;text-decoration:none;display:block;width:100%;
+  text-align:center;transition:all .2s;
+}
+.tl-btn:hover{border-color:rgba(255,255,255,.65);color:#fff;background:rgba(0,0,0,.75)}
 
 #title-center{text-align:center;flex:1}
 #title-main{font-size:22px;letter-spacing:8px;font-weight:700;text-transform:uppercase;text-shadow:0 0 20px currentColor}
@@ -205,11 +214,6 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
       <div id="level-text">LEVEL</div>
       <div id="level-num">1</div>
       <div id="level-bar-wrap"><div id="level-bar" style="width:0%"></div></div>
-      <div id="level-speed-display">—</div>
-      <div id="level-actions">
-        <button id="toggle-vlans" class="lv-btn">⊟ VLANS</button>
-        <a id="settings-link" class="lv-btn" href="/settings">⚙ SETTINGS</a>
-      </div>
     </div>
     <div id="title-center">
       <div id="title-main">MILD-VIKING</div>
@@ -258,6 +262,13 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
     <span id="vlans-close">✕</span>
   </div>
   <div id="vlans-list"></div>
+</div>
+
+<!-- ── Top-left action panel (outside HUD, always clickable) ── -->
+<div id="tl-panel">
+  <div id="tl-speed"></div>
+  <button id="toggle-vlans" class="tl-btn">⊟ VLANS</button>
+  <a id="settings-link" class="tl-btn" href="/settings">⚙ SETTINGS</a>
 </div>
 
 <!-- ── Corner buttons ── -->
@@ -806,7 +817,7 @@ function updateHUD(data) {
   if (data.speedtest_dl || data.speedtest_ul) {
     const spdTxt = `↓${(data.speedtest_dl||0).toFixed(0)} ↑${(data.speedtest_ul||0).toFixed(0)} Mb`;
     el('stat-speed').textContent = spdTxt;
-    el('level-speed-display').textContent = spdTxt;
+    el('tl-speed').textContent = spdTxt;
   }
 
   // Connection dot
@@ -1055,13 +1066,45 @@ socket.on('disconnect', () => {
   el('mode-label').style.opacity = '1';
 });
 
+let _speedtestWaiting = false;
+let _speedtestWasRunning = false;
+
 socket.on('status_update', data => {
   updateHUD(data);
   updateBubbles(data.devices || []);
   if (data.vlan_subnets || data.subnet) {
     updateVlans(data.vlan_subnets, data.subnet, data.gateway_ip);
   }
+  // Detect speedtest completion via the status stream (reliable fallback)
+  if (_speedtestWaiting) {
+    if (data.speedtest_running) {
+      _speedtestWasRunning = true;
+    } else if (_speedtestWasRunning) {
+      // Just transitioned from running → done
+      _speedtestWaiting    = false;
+      _speedtestWasRunning = false;
+      _onSpeedtestDone(data.speedtest_dl, data.speedtest_ul, data.speedtest_ping);
+    }
+  }
 });
+
+// ── Shared speedtest completion handler ────────────────────────────
+function _onSpeedtestDone(dl, ul, ping) {
+  el('speedtest-btn').textContent   = '⚡ SPEEDTEST';
+  el('speedtest-btn').style.pointerEvents = 'auto';
+  const statusEl = el('speedtest-status');
+  if (dl || ul) {
+    const p   = ping != null ? `  ${Number(ping).toFixed(0)}ms` : '';
+    const txt = `↓${Number(dl).toFixed(1)} ↑${Number(ul).toFixed(1)} Mb${p}`;
+    statusEl.textContent = txt;
+    el('tl-speed').textContent    = txt;
+    el('stat-speed').textContent  = `↓${Number(dl).toFixed(0)} ↑${Number(ul).toFixed(0)} Mb`;
+  } else {
+    statusEl.textContent = 'TEST FAILED';
+  }
+  statusEl.style.opacity = '1';
+  setTimeout(() => { statusEl.style.opacity = '0'; }, 6000);
+}
 
 // ── Scan button ───────────────────────────────────────────────────
 el('scan-btn').addEventListener('click', () => {
@@ -1080,24 +1123,16 @@ el('speedtest-btn').addEventListener('click', () => {
   el('speedtest-btn').textContent = '⚡ RUNNING...';
   el('speedtest-btn').style.pointerEvents = 'none';
   el('speedtest-status').style.opacity = '1';
-  el('speedtest-status').textContent = 'RUNNING SPEED TEST...';
+  el('speedtest-status').textContent = 'SPEED TEST RUNNING...';
+  _speedtestWaiting    = true;
+  _speedtestWasRunning = false;
+  // Fallback: if status stream never transitions, use socket event
 });
 socket.on('speedtest_result', data => {
-  if (!data.running) {
-    el('speedtest-btn').textContent = '⚡ SPEEDTEST';
-    el('speedtest-btn').style.pointerEvents = 'auto';
-    const statusEl = el('speedtest-status');
-    if (data.dl !== undefined) {
-      const ping = data.ping != null ? `  ${data.ping.toFixed(0)}ms` : '';
-      statusEl.textContent = `↓${data.dl.toFixed(1)} ↑${data.ul.toFixed(1)} Mb${ping}`;
-      const spdTxt = `↓${data.dl.toFixed(0)} ↑${data.ul.toFixed(0)} Mb`;
-      el('stat-speed').textContent = spdTxt;
-      el('level-speed-display').textContent = spdTxt;
-    } else {
-      statusEl.textContent = 'TEST FAILED';
-    }
-    statusEl.style.opacity = '1';
-    setTimeout(() => { statusEl.style.opacity = '0'; }, 6000);
+  if (!data.running && _speedtestWaiting) {
+    _speedtestWaiting    = false;
+    _speedtestWasRunning = false;
+    _onSpeedtestDone(data.dl, data.ul, data.ping);
   }
 });
 

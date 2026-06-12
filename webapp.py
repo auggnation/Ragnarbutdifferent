@@ -357,17 +357,22 @@ def on_request_speedtest():
 
     def _run_and_emit():
         mon.trigger_speedtest()
-        # Poll until done (max 120s)
+        # Wait up to 5 s for the thread to actually set speedtest_running=True
+        for _ in range(5):
+            time.sleep(1)
+            if mon.speedtest_running:
+                break
+        # Now wait up to 120 s for it to finish
         for _ in range(120):
             time.sleep(1)
             if not mon.speedtest_running:
                 break
         socketio.emit('speedtest_result', {
             'running': False,
-            'dl': mon.speedtest_dl,
-            'ul': mon.speedtest_ul,
+            'dl':   mon.speedtest_dl,
+            'ul':   mon.speedtest_ul,
             'ping': mon.speedtest_ping,
-            'at': mon.speedtest_at,
+            'at':   mon.speedtest_at,
         })
 
     threading.Thread(target=_run_and_emit, daemon=True, name="speedtest-emit").start()
