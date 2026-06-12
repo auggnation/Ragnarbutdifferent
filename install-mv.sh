@@ -38,7 +38,7 @@ header()  { echo -e "\n${CYAN}━━━━━━━━━━━━━━━━�
 [ "$(id -u)" -ne 0 ] && die "Run as root: sudo $0"
 
 # ── Platform detect ───────────────────────────────────────────────
-PKG_MGR="apt"; UPDATE_CMD="apt-get update -y"; INSTALL_CMD="apt-get install -y"
+PKG_MGR="apt"; UPDATE_CMD="apt-get update -y"; INSTALL_CMD="DEBIAN_FRONTEND=noninteractive apt-get install -y -q"
 IS_ARM=false; ARCH=$(uname -m 2>/dev/null || echo "unknown")
 case "$ARCH" in arm*|aarch64) IS_ARM=true ;; esac
 if [ -f /etc/os-release ]; then
@@ -104,9 +104,8 @@ SYSTEM_PKGS=(
     git wget curl
     network-manager iproute2 net-tools iputils-ping
     arp-scan nmap
-    hostapd dnsmasq
     libjpeg-dev zlib1g-dev libfreetype6-dev liblcms2-dev
-    libopenjp2-7 libtiff5-dev libffi-dev libssl-dev
+    libopenjp2-7 libtiff-dev libffi-dev libssl-dev
     build-essential
 )
 
@@ -117,6 +116,10 @@ fi
 
 info "Installing system packages..."
 $INSTALL_CMD "${SYSTEM_PKGS[@]}" >> "$LOG_FILE" 2>&1 || warn "Some packages may not have installed (continuing)"
+
+# AP-mode packages (optional, non-blocking)
+info "Installing AP-mode packages (optional)..."
+$INSTALL_CMD hostapd dnsmasq >> "$LOG_FILE" 2>&1 || warn "hostapd/dnsmasq not installed — AP mode unavailable"
 ok "System packages installed"
 
 # ═══════════════════════════════════════════════════════════════════
