@@ -168,7 +168,8 @@ def api_wifi_networks():
 
 @app.route('/api/wifi/connect', methods=['POST'])
 def api_wifi_connect():
-    """Add a WiFi network and trigger reconnect."""
+    """Add a WiFi network to config and connect to it immediately via nmcli."""
+    import subprocess
     data = request.get_json(silent=True) or {}
     ssid = data.get('ssid', '').strip()
     password = data.get('password', '').strip()
@@ -180,7 +181,27 @@ def api_wifi_connect():
         networks.append({'ssid': ssid, 'password': password})
         _shared_data.config['wifi_known_networks'] = networks
         _shared_data.save_config()
-    return jsonify({'status': 'network saved'})
+
+    # Attempt live connection via nmcli
+    try:
+        if password:
+            result = subprocess.run(
+                ['nmcli', 'device', 'wifi', 'connect', ssid, 'password', password],
+                capture_output=True, text=True, timeout=30
+            )
+        else:
+            result = subprocess.run(
+                ['nmcli', 'device', 'wifi', 'connect', ssid],
+                capture_output=True, text=True, timeout=30
+            )
+        if result.returncode == 0:
+            return jsonify({'status': 'connected', 'ssid': ssid})
+        err = result.stderr.strip() or result.stdout.strip()
+        return jsonify({'status': 'saved', 'warning': err})
+    except FileNotFoundError:
+        return jsonify({'status': 'saved', 'warning': 'nmcli not available'})
+    except Exception as exc:
+        return jsonify({'status': 'saved', 'warning': str(exc)})
 
 
 @app.route('/api/settings', methods=['GET', 'POST'])
