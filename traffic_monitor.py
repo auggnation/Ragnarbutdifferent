@@ -104,7 +104,7 @@ class TrafficMonitor:
         self._last_scan_time = 0.0
         self._INFO_INTERVAL  = 15.0        # seconds
         self._STYLE_INTERVAL = 45.0        # seconds per animation style
-        self._SCAN_INTERVAL  = 120.0       # seconds between device scans
+        self._SCAN_INTERVAL  = 30.0        # seconds between device scans
         self._SPEED_INTERVAL = 1800.0      # 30 min between speed tests
 
         # Do initial probe so data is available immediately
@@ -190,8 +190,8 @@ class TrafficMonitor:
                 logger.error(f"Traffic loop error: {exc}")
 
     def _scan_loop(self):
-        # Initial scan after a short delay to let the network settle
-        self._stop.wait(12)
+        # Brief initial delay to let network settle, then scan constantly
+        self._stop.wait(5)
         while not self._stop.is_set():
             try:
                 self._scan_devices()

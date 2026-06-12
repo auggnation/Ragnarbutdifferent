@@ -20,7 +20,10 @@ import signal
 from datetime import datetime, timedelta
 from shared import detect_wifi_interface
 from logger import Logger
-from db_manager import get_db
+try:
+    from db_manager import get_db
+except ImportError:
+    get_db = None
 from wifi_interfaces import gather_wifi_interfaces, get_active_ethernet_interface
 
 

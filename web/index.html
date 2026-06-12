@@ -106,9 +106,29 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 .device-mac{opacity:.5;font-size:10px;margin-top:1px}
 .device-host{opacity:.65;font-size:10px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* ── Toggle devices btn ───────────────────────────────────────── */
+/* ── VLAN panel ───────────────────────────────────────────────── */
+#vlans-panel{
+  position:fixed;left:0;top:0;bottom:0;width:240px;z-index:15;
+  background:rgba(0,0,0,.85);border-right:1px solid rgba(255,255,255,.1);
+  transform:translateX(-100%);transition:transform .3s ease;
+  overflow-y:auto;pointer-events:all;
+}
+#vlans-panel.open{transform:translateX(0)}
+#vlans-header{
+  padding:14px;border-bottom:1px solid rgba(255,255,255,.1);
+  display:flex;justify-content:space-between;align-items:center;
+  font-size:11px;letter-spacing:3px;text-transform:uppercase;opacity:.7;
+}
+#vlans-close{cursor:pointer;font-size:16px;opacity:.6}
+#vlans-close:hover{opacity:1}
+.vlan-item{
+  padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.05);
+  font-size:11px;letter-spacing:1px;
+}
+
+/* ── Toggle buttons ───────────────────────────────────────────── */
 #toggle-devices{
-  position:fixed;bottom:14px;left:20px;z-index:20;
+  position:fixed;bottom:14px;right:20px;z-index:20;
   pointer-events:all;cursor:pointer;
   font-size:10px;letter-spacing:3px;text-transform:uppercase;
   padding:6px 14px;border:1px solid rgba(255,255,255,.3);
@@ -116,6 +136,15 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
   transition:all .2s;
 }
 #toggle-devices:hover{border-color:currentColor;color:#fff}
+#toggle-vlans{
+  position:fixed;bottom:14px;left:20px;z-index:20;
+  pointer-events:all;cursor:pointer;
+  font-size:10px;letter-spacing:3px;text-transform:uppercase;
+  padding:6px 14px;border:1px solid rgba(255,255,255,.3);
+  background:rgba(0,0,0,.5);color:rgba(255,255,255,.6);
+  transition:all .2s;
+}
+#toggle-vlans:hover{border-color:currentColor;color:#fff}
 
 /* ── Scanlines overlay ────────────────────────────────────────── */
 #scanlines{

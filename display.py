@@ -26,7 +26,11 @@ import math
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 from init_shared import shared_data  
-from comment import Commentaireia
+try:
+    from comment import Commentaireia as _Commentaireia
+except ImportError:
+    _Commentaireia = None
+Commentaireia = _Commentaireia
 from logger import Logger
 import subprocess
 import urllib.request
@@ -156,6 +160,13 @@ class Display:
         if self.is_wide and EPDButtonListener is not None:
             self.button_listener = EPDButtonListener(shared_data)
             self.button_listener.start()
+
+        # Auto-scroll sub-pages on PAGE_MAIN every 15 s
+        # 0 = main stats, 1 = devices list, 2 = VLAN/subnet list
+        self._sub_page = 0
+        self._sub_page_last_switch = time.time()
+        self._SUB_PAGE_INTERVAL = 15.0
+        self._SUB_PAGE_COUNT = 3
 
     def get_frise_position(self):
         """Get the frise position based on the display type."""
@@ -2896,52 +2907,113 @@ class Display:
                 conn_type    = tm_data.get('connection_type', '')
                 spd_dl       = tm_data.get('speedtest_dl', 0.0)
                 spd_ul       = tm_data.get('speedtest_ul', 0.0)
+                devices      = tm_data.get('devices', [])
+                vlans        = tm_data.get('vlan_subnets', [])
+                subnet       = tm_data.get('subnet', '')
+
+                # ── Auto-advance sub-page every 15 s ────────────────────────────
+                now_t = time.time()
+                if now_t - self._sub_page_last_switch >= self._SUB_PAGE_INTERVAL:
+                    self._sub_page = (self._sub_page + 1) % self._SUB_PAGE_COUNT
+                    self._sub_page_last_switch = now_t
 
                 display_image = self.shared_data.attack if high_traffic else self.main_image
                 if not display_image:
                     display_image = getattr(self.shared_data, 'ragnarstatusimage', None)
 
-                # Title bar — just the name, no mode label
-                draw.text((int(6 * sx), int(4 * sy)), "MILD-VIKING",
-                          font=self.shared_data.font_arialbold, fill=0)
+                # Page indicator dots  (●○○  ○●○  ○○●)
+                def _page_dots(cur, total):
+                    return '  '.join('●' if i == cur else '○' for i in range(total))
 
-                # Center image — 48% of screen height
-                if display_image is not None:
-                    max_h = int(H * 0.48)
-                    max_w = int(W * 0.90)
-                    scale = min(max_w / max(display_image.width, 1), max_h / max(display_image.height, 1))
-                    if scale > 0:
-                        img_w = max(1, int(display_image.width  * scale))
-                        img_h = max(1, int(display_image.height * scale))
-                        try:
-                            display_image = display_image.resize((img_w, img_h), Image.Resampling.LANCZOS)
-                        except Exception:
-                            display_image = display_image.resize((img_w, img_h), Image.NEAREST)
-                        cx = (W - display_image.width) // 2
-                        image.paste(display_image, (cx, int(H * 0.13)))
+                # ── SUB-PAGE 0: Main stats + Viking image ────────────────────────
+                if self._sub_page == 0:
+                    draw.text((int(6 * sx), int(4 * sy)), "MILD-VIKING",
+                              font=self.shared_data.font_arialbold, fill=0)
 
-                # ── Status rows ──────────────────────────────────────────────────
-                ip_str  = current_ip   if current_ip   else '---'
-                net_str = current_ssid if current_ssid else (conn_type.upper() if conn_type else 'NO NET')
-                if spd_dl or spd_ul:
-                    spd_str = f"{spd_dl:.0f}↓  {spd_ul:.0f}↑ Mb"
-                else:
-                    spd_str = "pending"
+                    if display_image is not None:
+                        max_h = int(H * 0.48)
+                        max_w = int(W * 0.90)
+                        scale = min(max_w / max(display_image.width, 1), max_h / max(display_image.height, 1))
+                        if scale > 0:
+                            img_w = max(1, int(display_image.width  * scale))
+                            img_h = max(1, int(display_image.height * scale))
+                            try:
+                                di = display_image.resize((img_w, img_h), Image.Resampling.LANCZOS)
+                            except Exception:
+                                di = display_image.resize((img_w, img_h), Image.NEAREST)
+                            cx = (W - di.width) // 2
+                            image.paste(di, (cx, int(H * 0.13)))
 
-                metrics = [
-                    ("IP",  ip_str[:20]),
-                    ("NET", net_str[:20]),
-                    (f"LVL {level}", uptime_h),
-                    (f"↓{recv_human}", f"↑{sent_human}"),
-                    ("SPD", spd_str),
-                    ("DEV", str(dev_count)),
-                ]
+                    ip_str  = current_ip   if current_ip   else '---'
+                    net_str = current_ssid if current_ssid else (conn_type.upper() if conn_type else 'NO NET')
+                    spd_str = f"{spd_dl:.0f}↓  {spd_ul:.0f}↑ Mb" if (spd_dl or spd_ul) else "pending"
 
-                y = int(H * 0.64)
-                for label, value in metrics:
-                    draw.text((int(6 * sx), y), f"{label}  {value}",
+                    metrics = [
+                        ("IP",  ip_str[:20]),
+                        ("NET", net_str[:20]),
+                        (f"LVL {level}", uptime_h),
+                        (f"↓{recv_human}", f"↑{sent_human}"),
+                        ("SPD", spd_str),
+                        ("DEV", str(dev_count)),
+                    ]
+                    y = int(H * 0.64)
+                    for label, value in metrics:
+                        draw.text((int(6 * sx), y), f"{label}  {value}",
+                                  font=self.shared_data.font_arial11, fill=0)
+                        y += int(12 * sy)
+
+                # ── SUB-PAGE 1: Connected devices list ───────────────────────────
+                elif self._sub_page == 1:
+                    draw.text((int(6 * sx), int(4 * sy)), "MILD-VIKING  DEVICES",
+                              font=self.shared_data.font_arialbold, fill=0)
+                    y = int(22 * sy)
+                    draw.text((int(6 * sx), y), f"{dev_count} device(s) on network",
                               font=self.shared_data.font_arial11, fill=0)
-                    y += int(12 * sy)
+                    y += int(13 * sy)
+                    if devices:
+                        for dev in devices[:12]:
+                            ip_d = dev.get('ip', '?')
+                            host = dev.get('hostname', '') or dev.get('mac', '')[:8]
+                            line = ip_d if not host else f"{ip_d}  {host[:14]}"
+                            draw.text((int(6 * sx), y), line,
+                                      font=self.shared_data.font_arial11, fill=0)
+                            y += int(11 * sy)
+                            if y > H - int(14 * sy):
+                                break
+                    else:
+                        draw.text((int(6 * sx), y), "Scanning...",
+                                  font=self.shared_data.font_arial11, fill=0)
+
+                # ── SUB-PAGE 2: VLANs / subnets ─────────────────────────────────
+                else:
+                    draw.text((int(6 * sx), int(4 * sy)), "MILD-VIKING  VLANS",
+                              font=self.shared_data.font_arialbold, fill=0)
+                    y = int(22 * sy)
+                    all_nets = vlans if vlans else ([subnet] if subnet else [])
+                    if all_nets:
+                        for net in all_nets[:14]:
+                            draw.text((int(6 * sx), y), str(net),
+                                      font=self.shared_data.font_arial11, fill=0)
+                            y += int(13 * sy)
+                            if y > H - int(14 * sy):
+                                break
+                    else:
+                        draw.text((int(6 * sx), y), "No subnets found",
+                                  font=self.shared_data.font_arial11, fill=0)
+                    y = max(y, int(H * 0.85))
+                    draw.text((int(6 * sx), y),
+                              f"GW {tm_data.get('gateway_ip','?')}  {conn_type.upper()}",
+                              font=self.shared_data.font_arial11, fill=0)
+
+                # Page dots at bottom
+                dots = _page_dots(self._sub_page, self._SUB_PAGE_COUNT)
+                try:
+                    db = self.shared_data.font_arial11.getbbox(dots)
+                    dx = (W - (db[2] - db[0])) // 2
+                except Exception:
+                    dx = W // 2 - 10
+                draw.text((dx, H - int(12 * sy)), dots,
+                          font=self.shared_data.font_arial11, fill=0)
 
                 # Border
                 draw.rectangle((1, 1, W - 1, H - 1), outline=0)
