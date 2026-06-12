@@ -1,4 +1,4 @@
-# Ragnar.py
+# mildviking.py
 # Network Traffic Monitor — main entry point
 # Manages WiFi, traffic monitoring, display, and web server
 

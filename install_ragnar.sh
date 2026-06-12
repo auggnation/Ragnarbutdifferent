@@ -135,7 +135,7 @@ usermod -aG sudo,netdev,dialout "$RAGNAR_USER" 2>/dev/null || true
 [ "$IS_ARM" = true ] && usermod -aG gpio,spi,i2c "$RAGNAR_USER" 2>/dev/null || true
 
 # Backup existing install if present
-if [ -d "$RAGNAR_PATH" ] && [ -f "$RAGNAR_PATH/Ragnar.py" ]; then
+if [ -d "$RAGNAR_PATH" ] && [ -f "$RAGNAR_PATH/mildviking.py" ]; then
     BACKUP="${RAGNAR_PATH}_backup_$(date +%Y%m%d_%H%M%S)"
     info "Backing up existing installation to $BACKUP"
     # Preserve config and data
@@ -253,7 +253,7 @@ Wants=network-online.target
 Type=simple
 User=${RAGNAR_USER}
 WorkingDirectory=${RAGNAR_PATH}
-ExecStart=${VENV_PATH}/bin/python3 ${RAGNAR_PATH}/Ragnar.py
+ExecStart=${VENV_PATH}/bin/python3 ${RAGNAR_PATH}/mildviking.py
 Restart=always
 RestartSec=10
 StandardOutput=journal

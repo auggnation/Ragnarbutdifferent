@@ -24,7 +24,7 @@ from shared import SharedData
 shared_data = SharedData()
 
 # Add attributes to allow dynamic assignment without Pylance errors
-# These are assigned at runtime in Ragnar.py and other modules
+# These are assigned at runtime in mildviking.py and other modules
 shared_data.ragnar_instance = None
 shared_data.display_instance = None
 
