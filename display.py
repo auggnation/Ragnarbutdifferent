@@ -95,7 +95,11 @@ class Display:
         self.shared_data = shared_data
         self.config = self.shared_data.config
         self.shared_data.ragnarstatustext2 = "Awakening..."
-        self.commentaire_ia = Commentaireia()
+        try:
+            self.commentaire_ia = Commentaireia()
+        except Exception as _ce:
+            logger.warning(f"Comments unavailable (non-fatal): {_ce}")
+            self.commentaire_ia = None
         self.semaphore = threading.Semaphore(10)
         self.screen_reversed = self.shared_data.screen_reversed
         self.web_screen_reversed = self.shared_data.web_screen_reversed
@@ -482,12 +486,15 @@ class Display:
 
     def display_comment(self, status):
         """Display the comment based on the status of the ragnarorch."""
-        comment = self.commentaire_ia.get_commentaire(status)
-        if comment:
-            self.shared_data.ragnarsays = comment
-            self.shared_data.ragnarstatustext = self.shared_data.ragnarorch_status
-        else:
-            pass
+        if not self.commentaire_ia:
+            return
+        try:
+            comment = self.commentaire_ia.get_commentaire(status)
+            if comment:
+                self.shared_data.ragnarsays = comment
+                self.shared_data.ragnarstatustext = self.shared_data.ragnarorch_status
+        except Exception as e:
+            logger.debug(f"display_comment error: {e}")
 
     # # # def is_bluetooth_connected(self):
     # # #     """
@@ -2867,80 +2874,74 @@ class Display:
                     sx = self.scale_factor_x
                     sy = self.scale_factor_y
 
-                # Use traffic metrics to decide whether the tracker should show attack-mode visuals.
-                traffic_data = self._get_main_traffic_state()
-                high_traffic = self._is_high_traffic(traffic_data)
+                # ── Pull data from traffic_monitor ──────────────────────────────
+                tm = getattr(self.shared_data, 'traffic_monitor', None)
+                if tm:
+                    try:
+                        tm_data = tm.get_status()
+                    except Exception:
+                        tm_data = {}
+                else:
+                    tm_data = {}
 
-                display_label = "TRAFFIC ATTACK" if high_traffic else "DESKTOP TRACKER"
+                anim_mode    = tm_data.get('animation_mode', 'idle')
+                high_traffic = anim_mode == 'attack'
+                current_ip   = tm_data.get('current_ip')   or getattr(self.shared_data, 'current_ip', '') or ''
+                current_ssid = tm_data.get('current_ssid') or getattr(self.shared_data, 'current_ssid', '') or ''
+                level        = tm_data.get('level', getattr(self.shared_data, 'levelnbr', 1))
+                uptime_h     = tm_data.get('uptime_human', '0s')
+                recv_human   = tm_data.get('recv_rate_human', '0 B/s')
+                sent_human   = tm_data.get('sent_rate_human', '0 B/s')
+                dev_count    = tm_data.get('device_count', 0)
+                conn_type    = tm_data.get('connection_type', '')
+
+                mode_labels  = {'idle': 'IDLE', 'active': 'ACTIVE', 'attack': 'STORM'}
+                mode_str     = mode_labels.get(anim_mode, 'IDLE')
+
+                display_label = f"RAGNAR  [{mode_str}]"
                 display_image = self.shared_data.attack if high_traffic else self.main_image
                 if not display_image:
                     display_image = getattr(self.shared_data, 'ragnarstatusimage', None)
 
-                throughput = traffic_data.get('throughput_mbps', 0.0)
-                pkts_sec = traffic_data.get('packets_per_second', 0.0)
-                total_alerts = traffic_data.get('total_alerts', 0)
-                unique_hosts = traffic_data.get('unique_hosts', 0)
-                connections = traffic_data.get('active_connections', 0)
-                last_speed = getattr(self.shared_data, 'last_speed_test_mbps', 0.0)
-                last_speed_time = getattr(self.shared_data, 'last_speed_test_time', None)
-                last_speed_status = getattr(self.shared_data, 'last_speed_test_status', 'never')
-                top_hosts = []
-                analyzer = getattr(self.shared_data, '_traffic_analyzer', None)
-                if analyzer is not None:
-                    try:
-                        top_hosts = analyzer.get_top_hosts(limit=1)
-                    except Exception:
-                        top_hosts = []
-                top_host = top_hosts[0].get('ip', 'N/A') if top_hosts else 'N/A'
-                current_status = getattr(self.shared_data, 'ragnarorch_status', 'IDLE')
+                # Title bar
+                draw.text((int(6 * sx), int(4 * sy)), display_label,
+                          font=self.shared_data.font_arialbold, fill=0)
 
-                # Draw the big tracker title and reduced status lines.
-                draw.text((int(6 * sx), int(4 * sy)), display_label, font=self.shared_data.font_arialbold, fill=0)
-
-                # Big Viking image, scaled taller and centered.
+                # Center image (Viking / attack graphic) — shrink to top 40% of screen
                 if display_image is not None:
-                    max_height = int(H * 0.55)
-                    max_width = int(W * 0.9)
-                    scale = min(max_width / display_image.width, max_height / display_image.height)
-                    if scale <= 0:
-                        scale = 1.0
-                    img_w = max(1, int(display_image.width * scale))
-                    img_h = max(1, int(display_image.height * scale))
-                    if img_w != display_image.width or img_h != display_image.height:
+                    max_h = int(H * 0.40)
+                    max_w = int(W * 0.85)
+                    scale = min(max_w / max(display_image.width, 1), max_h / max(display_image.height, 1))
+                    if scale > 0:
+                        img_w = max(1, int(display_image.width  * scale))
+                        img_h = max(1, int(display_image.height * scale))
                         try:
                             display_image = display_image.resize((img_w, img_h), Image.Resampling.LANCZOS)
                         except Exception:
                             display_image = display_image.resize((img_w, img_h), Image.NEAREST)
-                    cx = (W - display_image.width) // 2
-                    cy = int(H * 0.16)
-                    image.paste(display_image, (cx, cy))
-                else:
-                    cx = 0
-                    cy = int(H * 0.16)
+                        cx = (W - display_image.width) // 2
+                        image.paste(display_image, (cx, int(H * 0.14)))
 
-                speed_label = f"{last_speed:.1f} Mbps" if last_speed and last_speed_status == 'OK' else last_speed_status.title()
-                last_speed_text = last_speed_time
-                if last_speed_time:
-                    try:
-                        last_speed_text = datetime.fromisoformat(last_speed_time).strftime('%H:%M')
-                    except Exception:
-                        last_speed_text = last_speed_time
+                # ── Status rows (bottom half) ────────────────────────────────────
+                # IP and network name
+                ip_str   = current_ip   if current_ip   else '---'
+                net_str  = current_ssid if current_ssid else (conn_type.upper() if conn_type else 'NO NET')
 
                 metrics = [
-                    ("Throughput", f"{throughput:.1f} Mbps"),
-                    ("Hosts", str(unique_hosts)),
-                    ("Conns", str(connections)),
-                    ("Speed", speed_label),
-                    ("Last", last_speed_text or 'never'),
-                    ("Top", top_host),
+                    ("IP",  ip_str[:20]),
+                    ("NET", net_str[:20]),
+                    (f"LVL {level}", uptime_h),
+                    (f"↓{recv_human}", f"↑{sent_human}"),
+                    ("DEV", str(dev_count)),
                 ]
 
-                y = H - int(20 * sy) - len(metrics) * int(10 * sy)
+                y = int(H * 0.58)
                 for label, value in metrics:
-                    draw.text((int(6 * sx), y), f"{label}: {value}", font=self.shared_data.font_arial11, fill=0)
-                    y += int(11 * sy)
+                    draw.text((int(6 * sx), y), f"{label}  {value}",
+                              font=self.shared_data.font_arial11, fill=0)
+                    y += int(13 * sy)
 
-                # Draw a simple border only.
+                # Border
                 draw.rectangle((1, 1, W - 1, H - 1), outline=0)
 
                 if self.screen_reversed and self.screen_reversed in _ROTATION_TRANSPOSE:
