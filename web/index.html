@@ -1172,30 +1172,9 @@ el('scan-btn').addEventListener('click', () => {
   }, 5000);
 });
 
-// ── Speedtest button — triggers device speed test ─────────────────
-el('speedtest-btn').addEventListener('click', async () => {
-  el('speedtest-btn').textContent     = '⚡ TESTING...';
-  el('speedtest-btn').style.pointerEvents = 'none';
-  const statusEl = el('speedtest-status');
-  statusEl.textContent = 'Running speed test…';
-  statusEl.style.opacity = '1';
-  try {
-    const d = await fetch('/api/speedtest', {
-      method: 'POST',
-      signal: AbortSignal.timeout(130000),
-    }).then(r => r.json());
-    if (d.dl || d.ul) {
-      _onSpeedtestDone(d.dl, d.ul, d.ping);
-    } else {
-      statusEl.textContent = 'TEST FAILED';
-      setTimeout(() => { statusEl.style.opacity = '0'; }, 4000);
-    }
-  } catch(e) {
-    statusEl.textContent = 'TEST ERROR';
-    setTimeout(() => { statusEl.style.opacity = '0'; }, 4000);
-  }
-  el('speedtest-btn').textContent     = '⚡ SPEEDTEST';
-  el('speedtest-btn').style.pointerEvents = 'auto';
+// ── Speedtest button — opens speedtest.net in browser ────────────
+el('speedtest-btn').addEventListener('click', () => {
+  window.open('https://www.speedtest.net/', '_blank', 'noopener,noreferrer');
 });
 
 // ── Screen viewer widget toggle ────────────────────────────────────
