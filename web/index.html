@@ -137,29 +137,18 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
   opacity:0;transition:opacity .3s;pointer-events:none;
 }
 
-/* ── E-paper screen viewer ────────────────────────────────────── */
+/* ── E-paper screen viewer (always visible, center-left) ─────── */
 #screen-panel{
-  position:fixed;left:0;top:50%;transform:translateY(-50%) translateX(-100%);
-  z-index:15;background:rgba(0,0,0,.9);border:1px solid rgba(255,255,255,.15);
-  border-left:none;transition:transform .3s ease;pointer-events:all;
-  padding:10px;display:flex;flex-direction:column;align-items:center;gap:8px;
-  min-width:140px;
+  position:fixed;left:10px;top:50%;transform:translateY(-50%);
+  z-index:15;background:rgba(0,0,0,.85);border:1px solid rgba(255,255,255,.15);
+  pointer-events:all;padding:8px;display:flex;flex-direction:column;
+  align-items:center;gap:6px;min-width:120px;
 }
-#screen-panel.open{transform:translateY(-50%) translateX(0)}
 #screen-panel img{
-  image-rendering:pixelated;max-width:200px;width:100%;
+  image-rendering:pixelated;max-width:180px;width:100%;
   border:1px solid rgba(255,255,255,.1);
 }
-#screen-panel-label{font-size:9px;letter-spacing:3px;opacity:.5;text-transform:uppercase}
-#screen-toggle{
-  position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:16;
-  pointer-events:all;cursor:pointer;
-  writing-mode:vertical-rl;text-orientation:mixed;
-  font-size:9px;letter-spacing:3px;text-transform:uppercase;
-  padding:10px 5px;border:1px solid rgba(255,255,255,.2);border-left:none;
-  background:rgba(0,0,0,.6);color:rgba(255,255,255,.5);transition:all .2s;
-}
-#screen-toggle:hover{color:#fff;border-color:rgba(255,255,255,.5)}
+#screen-panel-label{font-size:8px;letter-spacing:3px;opacity:.4;text-transform:uppercase}
 
 /* ── VLAN panel ───────────────────────────────────────────────── */
 #vlans-panel{
@@ -276,8 +265,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 <button id="speedtest-btn" class="corner-btn">⚡ SPEEDTEST</button>
 <div id="speedtest-status"></div>
 
-<!-- ── E-paper screen viewer ── -->
-<div id="screen-toggle">📺 SCREEN</div>
+<!-- ── E-paper screen viewer (always visible) ── -->
 <div id="screen-panel">
   <div id="screen-panel-label">DEVICE SCREEN</div>
   <img id="screen-img" src="/web/screen.png" alt="device screen">
@@ -1136,16 +1124,10 @@ socket.on('speedtest_result', data => {
   }
 });
 
-// ── Screen viewer toggle ───────────────────────────────────────────
-el('screen-toggle').addEventListener('click', () => {
-  el('screen-panel').classList.toggle('open');
-});
-// Refresh screen image every 3s when panel is open
+// ── Screen viewer — always visible, refresh every 3s ─────────────
 setInterval(() => {
-  if (el('screen-panel').classList.contains('open')) {
-    const img = el('screen-img');
-    img.src = '/web/screen.png?t=' + Date.now();
-  }
+  const img = el('screen-img');
+  img.src = '/web/screen.png?t=' + Date.now();
 }, 3000);
 
 // ── Password gate ──────────────────────────────────────────────────

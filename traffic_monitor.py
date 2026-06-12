@@ -98,8 +98,12 @@ class TrafficMonitor:
         # Hostname resolution cache: ip → (hostname, expiry_timestamp)
         self._hostname_cache = {}
 
-        # Per-device traffic attribution (ip → {connections, bytes_in, bytes_out, rate_in, rate_out})
+        # Per-device traffic attribution (ip → {connections, rate_in, rate_out})
         self._dev_traffic = {}
+
+        # Monthly per-device totals (ip → {bytes_in, bytes_out}); resets each month
+        self._monthly_traffic = {}
+        self._monthly_month   = time.strftime('%Y-%m')
 
         # Speed test results
         self.speedtest_dl   = 0.0   # Mbps download
@@ -488,23 +492,58 @@ class TrafficMonitor:
         logger.info(f"Scan found {len(all_devices)} devices on {subnets}")
 
     def _discover_subnets(self):
-        """Enumerate all active IPv4 subnets."""
-        subnets = []
+        """Enumerate all active IPv4 subnets via interfaces, routes, and ARP."""
+        import ipaddress
+        subnets = set()
+
+        def _add_net(cidr):
+            try:
+                net = str(ipaddress.IPv4Network(cidr, strict=False))
+                if not (net.startswith('127.') or net.startswith('169.254.')):
+                    subnets.add(net)
+            except Exception:
+                pass
+
+        # Method 1: local interface addresses
         try:
-            r = subprocess.run(
-                ['ip', '-o', '-4', 'addr', 'show'],
-                capture_output=True, text=True, timeout=3
-            )
+            r = subprocess.run(['ip', '-o', '-4', 'addr', 'show'],
+                               capture_output=True, text=True, timeout=3)
             for line in r.stdout.splitlines():
                 cols = line.split()
                 if len(cols) < 4 or cols[1] == 'lo':
                     continue
                 for col in cols:
                     if re.match(r'\d+\.\d+\.\d+\.\d+/\d+', col):
-                        subnets.append(col)
+                        try:
+                            _add_net(str(ipaddress.IPv4Interface(col).network))
+                        except Exception:
+                            _add_net(col)
         except Exception:
             pass
-        return subnets or ['192.168.1.0/24']
+
+        # Method 2: connected routes from routing table
+        try:
+            r = subprocess.run(['ip', '-o', 'route', 'show'],
+                               capture_output=True, text=True, timeout=3)
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if parts and re.match(r'\d+\.\d+\.\d+\.\d+/\d+', parts[0]):
+                    _add_net(parts[0])
+        except Exception:
+            pass
+
+        # Method 3: ARP table — cross-subnet entries reveal VLANs/routed nets
+        try:
+            r = subprocess.run(['arp', '-n'], capture_output=True, text=True, timeout=3)
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                if parts and re.match(r'\d+\.\d+\.\d+\.\d+$', parts[0]):
+                    _add_net(f"{parts[0]}/24")
+        except Exception:
+            pass
+
+        result = sorted(subnets)
+        return result or ['192.168.1.0/24']
 
     def _scan_subnet(self, subnet, iface=""):
         # 1. arp-scan (fastest, needs root or setuid)
@@ -655,6 +694,16 @@ class TrafficMonitor:
             }
         self._dev_traffic = updated
 
+        # Accumulate monthly totals; reset at month boundary
+        cur_month = time.strftime('%Y-%m')
+        if cur_month != self._monthly_month:
+            self._monthly_traffic = {}
+            self._monthly_month = cur_month
+        for ip, t in updated.items():
+            entry = self._monthly_traffic.setdefault(ip, {'bytes_in': 0, 'bytes_out': 0})
+            entry['bytes_in']  += t.get('rate_in',  0.0)   # accumulate bytes/s × 1 s
+            entry['bytes_out'] += t.get('rate_out', 0.0)
+
     # ── Speed test ────────────────────────────────────────────────────
 
     def _speedtest_loop(self):
@@ -779,3 +828,18 @@ class TrafficMonitor:
         """Return the full persistent device registry."""
         with self._lock:
             return list(self._known_devices.values())
+
+    def get_monthly_report(self):
+        """Return per-device traffic totals for the current month, merged with device registry."""
+        with self._lock:
+            known = dict(self._known_devices)
+            monthly = dict(self._monthly_traffic)
+        result = []
+        all_ips = set(known) | set(monthly)
+        for ip in all_ips:
+            d = dict(known.get(ip, {'ip': ip, 'mac': '', 'hostname': ''}))
+            m = monthly.get(ip, {})
+            d['bytes_in']  = int(m.get('bytes_in',  0))
+            d['bytes_out'] = int(m.get('bytes_out', 0))
+            result.append(d)
+        return result

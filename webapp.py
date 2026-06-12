@@ -126,12 +126,16 @@ _CONFIG_SAFE_KEYS = {
     'wifi_ap_ssid', 'wifi_ap_password',
     'ethernet_prefer_over_wifi',
     'wifi_known_networks', 'wifi_default_interface',
+    # Time
+    'timezone', 'ntp_server',
     # Speed test settings
     'speedtest_enabled', 'speedtest_interval_min',
     # Email notifications
     'notify_enabled', 'notify_email',
     'smtp_host', 'smtp_port', 'smtp_user', 'smtp_pass',
     'notify_on_disconnect', 'notify_on_reconnect',
+    # Monthly device report
+    'monthly_report_enabled', 'monthly_report_email', 'monthly_report_last',
 }
 
 
@@ -312,6 +316,66 @@ def api_test_email():
             s.login(cfg.get('smtp_user', ''), cfg.get('smtp_pass', ''))
             s.send_message(msg)
         return jsonify({'status': 'ok'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/time', methods=['POST'])
+def api_time():
+    """Save timezone + NTP server; apply timezone/NTP to the OS if possible."""
+    import subprocess
+    if _shared_data is None:
+        return jsonify({'error': 'server not ready'}), 503
+    data = request.get_json(silent=True) or {}
+    tz  = data.get('timezone', '').strip()
+    ntp = data.get('ntp_server', '').strip()
+    if tz:
+        _shared_data.config['timezone'] = tz
+        try:
+            subprocess.run(['sudo', 'timedatectl', 'set-timezone', tz],
+                           timeout=5, check=False)
+        except Exception:
+            pass
+    if ntp:
+        _shared_data.config['ntp_server'] = ntp
+        try:
+            # Write NTP= line to /etc/systemd/timesyncd.conf if writable
+            subprocess.run(
+                ['sudo', 'bash', '-c',
+                 f'grep -q "^NTP=" /etc/systemd/timesyncd.conf && '
+                 f'sed -i "s/^NTP=.*/NTP={ntp}/" /etc/systemd/timesyncd.conf || '
+                 f'echo "NTP={ntp}" >> /etc/systemd/timesyncd.conf'],
+                timeout=5, check=False)
+            subprocess.run(['sudo', 'systemctl', 'restart', 'systemd-timesyncd'],
+                           timeout=5, check=False)
+        except Exception:
+            pass
+    try:
+        _shared_data.save_config()
+    except Exception:
+        pass
+    return jsonify({'status': 'saved'})
+
+
+@app.route('/api/report/monthly', methods=['POST'])
+def api_monthly_report():
+    """Generate and email the monthly device usage report immediately."""
+    from datetime import datetime as _dt
+    if _shared_data is None:
+        return jsonify({'error': 'server not ready'}), 503
+    cfg = _shared_data.config
+    mon = _monitor()
+    try:
+        from notifier import send_monthly_report
+        devices = mon.get_monthly_report() if mon and hasattr(mon, 'get_monthly_report') else []
+        send_monthly_report(cfg, devices)
+        sent_at = _dt.now().strftime('%Y-%m-%d %H:%M')
+        _shared_data.config['monthly_report_last'] = sent_at
+        try:
+            _shared_data.save_config()
+        except Exception:
+            pass
+        return jsonify({'status': 'ok', 'sent_at': sent_at})
     except Exception as e:
         return jsonify({'status': 'error', 'error': str(e)})
 

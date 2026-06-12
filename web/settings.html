@@ -85,6 +85,7 @@ html,body{background:#050510;color:#fff;font-family:'Courier New',monospace;min-
 .scan-signal{opacity:.5;font-size:10px}
 
 #speedtest-info{font-size:10px;opacity:.55;padding:8px 0;letter-spacing:1px}
+#report-history{font-size:10px;opacity:.55;padding:6px 0;letter-spacing:1px;line-height:1.6}
 </style>
 </head>
 <body>
@@ -159,6 +160,27 @@ html,body{background:#050510;color:#fff;font-family:'Courier New',monospace;min-
     </div>
   </div>
 
+  <!-- TIME / TIMEZONE / NTP -->
+  <div class="section">
+    <div class="section-header">Time &amp; Clock</div>
+    <div class="section-body">
+      <div class="field">
+        <label>Timezone</label>
+        <input type="text" id="timezone" placeholder="e.g. America/Chicago or UTC">
+        <div class="field-note">IANA timezone name · shown on e-paper display and reports</div>
+      </div>
+      <div class="field">
+        <label>NTP Server</label>
+        <input type="text" id="ntp-server" placeholder="e.g. pool.ntp.org">
+        <div class="field-note">Leave blank to use system default</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="saveTime()">Save &amp; Apply</button>
+        <span class="msg" id="time-msg"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- SPEED TESTS -->
   <div class="section">
     <div class="section-header">Speed Tests</div>
@@ -177,6 +199,28 @@ html,body{background:#050510;color:#fff;font-family:'Courier New',monospace;min-
         <button class="btn primary" onclick="saveSpeedtest()">Save</button>
         <button class="btn" id="spd-run-btn" onclick="runSpeedtest(this)">⚡ Run Now</button>
         <span class="msg" id="spd-msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- MONTHLY DEVICE REPORT -->
+  <div class="section">
+    <div class="section-header">Monthly Device Report</div>
+    <div class="section-body">
+      <label class="check-row">
+        <input type="checkbox" id="report-on">
+        <span>Send monthly report automatically</span>
+      </label>
+      <div class="field" style="margin-top:10px">
+        <label>Report recipient email</label>
+        <input type="email" id="report-email" placeholder="you@example.com">
+        <div class="field-note">Top 10 devices with hostname, MAC, IP, and in/out data</div>
+      </div>
+      <div id="report-history"></div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="saveReport()">Save</button>
+        <button class="btn" onclick="sendReportNow(this)">📊 Send Now</button>
+        <span class="msg" id="report-msg"></span>
       </div>
     </div>
   </div>
@@ -269,6 +313,15 @@ async function loadAll() {
         `Last: ↓${(st.speedtest_dl||0).toFixed(1)} ↑${(st.speedtest_ul||0).toFixed(1)} Mb` +
         (st.speedtest_ping ? `  ${st.speedtest_ping.toFixed(0)}ms` : '') +
         (st.speedtest_at ? `  @ ${st.speedtest_at}` : '');
+    }
+
+    document.getElementById('timezone').value       = c.timezone      || '';
+    document.getElementById('ntp-server').value     = c.ntp_server    || '';
+
+    document.getElementById('report-on').checked    = !!c.monthly_report_enabled;
+    document.getElementById('report-email').value   = c.monthly_report_email || c.notify_email || '';
+    if (c.monthly_report_last) {
+      document.getElementById('report-history').textContent = 'Last sent: ' + c.monthly_report_last;
     }
 
     document.getElementById('notify-on').checked   = !!c.notify_enabled;
@@ -396,6 +449,50 @@ function pickNet(ssid) {
   document.getElementById('wifi-ssid').value = ssid;
   document.getElementById('wifi-pw').focus();
   document.getElementById('scan-results').style.display = 'none';
+}
+
+// ── TIME / TIMEZONE / NTP ─────────────────────────────────────────
+async function saveTime() {
+  const tz  = document.getElementById('timezone').value.trim();
+  const ntp = document.getElementById('ntp-server').value.trim();
+  try {
+    const d = await api('/api/time', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({timezone: tz, ntp_server: ntp}),
+    });
+    msg('time-msg', d.status === 'saved' ? '✓ Saved' : '✗ ' + (d.error || 'Error'),
+        d.status === 'saved' ? 'ok' : 'err');
+  } catch(e) { msg('time-msg', '✗ Error', 'err'); }
+}
+
+// ── MONTHLY REPORT ────────────────────────────────────────────────
+async function saveReport() {
+  const payload = {
+    monthly_report_enabled: document.getElementById('report-on').checked,
+    monthly_report_email:   document.getElementById('report-email').value.trim(),
+  };
+  try {
+    const d = await api('/api/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    msg('report-msg', d.status === 'saved' ? '✓ Saved' : '✗ Error',
+        d.status === 'saved' ? 'ok' : 'err');
+  } catch(e) { msg('report-msg', '✗ Error', 'err'); }
+}
+
+async function sendReportNow(btn) {
+  msg('report-msg', '📊 Generating…', 'info');
+  btn.disabled = true;
+  try {
+    const d = await api('/api/report/monthly', {method: 'POST'});
+    msg('report-msg', d.status === 'ok' ? '✓ Report sent!' : '✗ ' + (d.error || 'Failed'),
+        d.status === 'ok' ? 'ok' : 'err');
+    if (d.sent_at) {
+      document.getElementById('report-history').textContent = 'Last sent: ' + d.sent_at;
+    }
+  } catch(e) { msg('report-msg', '✗ Error', 'err'); }
+  finally    { btn.disabled = false; }
 }
 
 // ── SPEED TESTS ──────────────────────────────────────────────────
