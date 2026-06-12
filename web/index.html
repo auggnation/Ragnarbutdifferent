@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAGNAR // NETWORK MONITOR</title>
+<script src="https://cdn.socket.io/4.8.3/socket.io.min.js"></script>
+<style>
+/* ── Reset & base ─────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Courier New',monospace;color:#fff}
+
+/* ── Full-screen canvas ──────────────────────────────────────── */
+#bg{position:fixed;inset:0;width:100%;height:100%;z-index:0}
+
+/* ── HUD overlay ─────────────────────────────────────────────── */
+#hud{position:fixed;inset:0;z-index:10;pointer-events:none;display:flex;flex-direction:column;justify-content:space-between}
+
+/* ── Top bar ─────────────────────────────────────────────────── */
+#top-bar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 20px 10px;
+  background:linear-gradient(180deg,rgba(0,0,0,.85) 0%,transparent 100%);
+  gap:12px;
+}
+#level-badge{
+  display:flex;flex-direction:column;align-items:center;
+  min-width:90px;
+}
+#level-text{font-size:11px;letter-spacing:3px;opacity:.7;text-transform:uppercase}
+#level-num{font-size:28px;font-weight:700;letter-spacing:2px;line-height:1;text-shadow:0 0 12px currentColor}
+#level-bar-wrap{width:80px;height:4px;background:rgba(255,255,255,.1);border-radius:2px;margin-top:3px;overflow:hidden}
+#level-bar{height:100%;border-radius:2px;transition:width .5s ease;box-shadow:0 0 6px currentColor}
+
+#title-center{text-align:center;flex:1}
+#title-main{font-size:22px;letter-spacing:8px;font-weight:700;text-transform:uppercase;text-shadow:0 0 20px currentColor}
+#title-sub{font-size:10px;letter-spacing:4px;opacity:.5;margin-top:2px;text-transform:uppercase}
+
+#net-info{text-align:right;min-width:140px}
+#net-ip{font-size:15px;font-weight:700;letter-spacing:1px;text-shadow:0 0 8px currentColor}
+#net-ssid{font-size:11px;opacity:.65;margin-top:3px;letter-spacing:1px}
+#net-type{font-size:10px;opacity:.45;margin-top:2px;letter-spacing:2px;text-transform:uppercase}
+
+/* ── Center overlay (mode label) ─────────────────────────────── */
+#center-overlay{
+  display:flex;align-items:center;justify-content:center;
+  flex:1;pointer-events:none;
+}
+#mode-label{
+  font-size:11px;letter-spacing:6px;text-transform:uppercase;
+  opacity:0;transition:opacity .4s ease;
+  padding:4px 14px;border:1px solid currentColor;
+  text-shadow:0 0 10px currentColor;
+  box-shadow:0 0 10px currentColor;
+}
+
+/* ── Bottom bar ───────────────────────────────────────────────── */
+#bottom-bar{
+  padding:10px 20px 14px;
+  background:linear-gradient(0deg,rgba(0,0,0,.85) 0%,transparent 100%);
+}
+#traffic-row{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.traffic-block{flex:1;display:flex;flex-direction:column;gap:3px}
+.traffic-label{font-size:10px;letter-spacing:3px;opacity:.6;text-transform:uppercase}
+.traffic-bar-wrap{height:5px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden}
+.traffic-bar{height:100%;border-radius:3px;transition:width .3s ease;box-shadow:0 0 5px currentColor}
+.traffic-val{font-size:14px;font-weight:700;letter-spacing:1px;text-shadow:0 0 8px currentColor}
+
+#stats-row{display:flex;align-items:center;justify-content:space-between;opacity:.6}
+#stat-devices{font-size:11px;letter-spacing:2px}
+#stat-uptime{font-size:11px;letter-spacing:2px}
+#stat-subnet{font-size:11px;letter-spacing:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#stat-conn{font-size:11px;letter-spacing:2px}
+
+/* ── Corner scan button ───────────────────────────────────────── */
+#scan-btn{
+  position:fixed;bottom:14px;right:20px;z-index:20;
+  pointer-events:all;cursor:pointer;
+  font-size:10px;letter-spacing:3px;text-transform:uppercase;
+  padding:6px 14px;border:1px solid rgba(255,255,255,.3);
+  background:rgba(0,0,0,.5);color:rgba(255,255,255,.6);
+  transition:all .2s;
+}
+#scan-btn:hover{border-color:currentColor;color:#fff;text-shadow:0 0 8px #fff;box-shadow:0 0 10px rgba(255,255,255,.2)}
+
+/* ── Devices panel ────────────────────────────────────────────── */
+#devices-panel{
+  position:fixed;right:0;top:0;bottom:0;width:260px;z-index:15;
+  background:rgba(0,0,0,.85);border-left:1px solid rgba(255,255,255,.1);
+  transform:translateX(100%);transition:transform .3s ease;
+  overflow-y:auto;pointer-events:all;
+}
+#devices-panel.open{transform:translateX(0)}
+#devices-header{
+  padding:14px;border-bottom:1px solid rgba(255,255,255,.1);
+  display:flex;justify-content:space-between;align-items:center;
+  font-size:11px;letter-spacing:3px;text-transform:uppercase;opacity:.7;
+}
+#devices-close{cursor:pointer;font-size:16px;opacity:.6}
+#devices-close:hover{opacity:1}
+.device-item{
+  padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.05);
+  font-size:11px;
+}
+.device-ip{font-weight:700;letter-spacing:1px}
+.device-mac{opacity:.5;font-size:10px;margin-top:1px}
+.device-host{opacity:.65;font-size:10px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── Toggle devices btn ───────────────────────────────────────── */
+#toggle-devices{
+  position:fixed;bottom:14px;left:20px;z-index:20;
+  pointer-events:all;cursor:pointer;
+  font-size:10px;letter-spacing:3px;text-transform:uppercase;
+  padding:6px 14px;border:1px solid rgba(255,255,255,.3);
+  background:rgba(0,0,0,.5);color:rgba(255,255,255,.6);
+  transition:all .2s;
+}
+#toggle-devices:hover{border-color:currentColor;color:#fff}
+
+/* ── Scanlines overlay ────────────────────────────────────────── */
+#scanlines{
+  position:fixed;inset:0;z-index:5;pointer-events:none;
+  background:repeating-linear-gradient(
+    0deg,transparent,transparent 2px,
+    rgba(0,0,0,.07) 2px,rgba(0,0,0,.07) 4px
+  );
+}
+
+/* ── Connection indicator ─────────────────────────────────────── */
+#conn-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#444;margin-right:5px;vertical-align:middle;transition:background .3s,box-shadow .3s}
+#conn-dot.connected{background:#0f0;box-shadow:0 0 6px #0f0}
+#conn-dot.ap{background:#fa0;box-shadow:0 0 6px #fa0}
+#conn-dot.disconnected{background:#f00;box-shadow:0 0 6px #f00}
+</style>
+</head>
+<body>
+
+<canvas id="bg"></canvas>
+<div id="scanlines"></div>
+
+<!-- ── HUD ── -->
+<div id="hud">
+  <!-- Top bar -->
+  <div id="top-bar">
+    <div id="level-badge">
+      <div id="level-text">LEVEL</div>
+      <div id="level-num">1</div>
+      <div id="level-bar-wrap"><div id="level-bar" style="width:0%"></div></div>
+    </div>
+    <div id="title-center">
+      <div id="title-main">RAGNAR</div>
+      <div id="title-sub">NETWORK MONITOR</div>
+    </div>
+    <div id="net-info">
+      <div id="net-ip">—.—.—.—</div>
+      <div id="net-ssid">Scanning...</div>
+      <div id="net-type">UNKNOWN</div>
+    </div>
+  </div>
+
+  <!-- Center: mode label -->
+  <div id="center-overlay">
+    <div id="mode-label">IDLE</div>
+  </div>
+
+  <!-- Bottom bar -->
+  <div id="bottom-bar">
+    <div id="traffic-row">
+      <div class="traffic-block">
+        <div class="traffic-label">↓ INBOUND</div>
+        <div class="traffic-bar-wrap"><div class="traffic-bar" id="recv-bar" style="width:0%"></div></div>
+        <div class="traffic-val" id="recv-val">0 B/s</div>
+      </div>
+      <div class="traffic-block">
+        <div class="traffic-label" style="text-align:right">OUTBOUND ↑</div>
+        <div class="traffic-bar-wrap"><div class="traffic-bar" id="sent-bar" style="width:0%"></div></div>
+        <div class="traffic-val" id="sent-val" style="text-align:right">0 B/s</div>
+      </div>
+    </div>
+    <div id="stats-row">
+      <span id="stat-devices">0 DEVICES</span>
+      <span id="stat-subnet">—</span>
+      <span id="stat-uptime">UP: 0s</span>
+      <span id="stat-conn"><span id="conn-dot"></span>OFFLINE</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Devices panel ── -->
+<div id="devices-panel">
+  <div id="devices-header">
+    <span>NETWORK DEVICES</span>
+    <span id="devices-close">✕</span>
+  </div>
+  <div id="devices-list"></div>
+</div>
+
+<!-- ── Corner buttons ── -->
+<button id="scan-btn">⟳ SCAN</button>
+<button id="toggle-devices">⊞ DEVICES</button>
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════════════════════════
+// COLOUR PALETTES
+// ═══════════════════════════════════════════════════════════════════
+const PALETTES = {
+  idle: {
+    bg:       '#050510',
+    primary:  '#1a5fff',
+    secondary:'#0033cc',
+    accent:   '#00aaff',
+    glow:     'rgba(0,100,255,',
+    text:     '#3377ff',
+  },
+  active: {
+    bg:       '#030d08',
+    primary:  '#00ff99',
+    secondary:'#00cc66',
+    accent:   '#00ffdd',
+    glow:     'rgba(0,255,100,',
+    text:     '#00ff88',
+  },
+  attack: {
+    bg:       '#0d0200',
+    primary:  '#ff3300',
+    secondary:'#cc1100',
+    accent:   '#ff8800',
+    glow:     'rgba(255,80,0,',
+    text:     '#ff4400',
+  },
+};
+
+// ═══════════════════════════════════════════════════════════════════
+// ANIMATION ENGINE
+// ═══════════════════════════════════════════════════════════════════
+const canvas = document.getElementById('bg');
+const ctx    = canvas.getContext('2d');
+
+let W = 0, H = 0;
+function resize() {
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// State
+let mode      = 'idle';
+let style     = 0;           // 0-3
+let intensity = 0;
+let palette   = PALETTES.idle;
+let targetPalette = PALETTES.idle;
+let blendT    = 1.0;         // 0 = fully prev, 1 = fully target
+
+// Particles
+const MAX_PARTICLES = 180;
+const particles = [];
+
+function mkParticle() {
+  const side = Math.floor(Math.random() * 4);
+  let x, y;
+  if      (side === 0) { x = Math.random() * W; y = -20; }
+  else if (side === 1) { x = W + 20; y = Math.random() * H; }
+  else if (side === 2) { x = Math.random() * W; y = H + 20; }
+  else                  { x = -20; y = Math.random() * H; }
+  return {
+    x, y,
+    vx: (Math.random() - .5) * 1.2,
+    vy: (Math.random() - .5) * 1.2,
+    r:  Math.random() * 2.5 + .8,
+    life: 1.0,
+    decay: Math.random() * .003 + .001,
+    pulse: Math.random() * Math.PI * 2,
+  };
+}
+
+// Seed particles
+for (let i = 0; i < 60; i++) {
+  const p = mkParticle();
+  p.x = Math.random() * W;
+  p.y = Math.random() * H;
+  particles.push(p);
+}
+
+// Rings (for style 1)
+const rings = [];
+function mkRing() {
+  return { r: 0, maxR: Math.max(W, H) * .8, life: 1.0, decay: .006 };
+}
+
+// Streams (for style 2)
+const streams = [];
+function mkStream() {
+  const angle = Math.random() * Math.PI * 2;
+  const dist  = Math.max(W, H) * .5 + 50;
+  return {
+    x:   W/2 + Math.cos(angle) * dist,
+    y:   H/2 + Math.sin(angle) * dist,
+    tx:  W/2 + (Math.random() - .5) * 100,
+    ty:  H/2 + (Math.random() - .5) * 100,
+    t:   0,
+    speed: Math.random() * .008 + .003,
+    life: 1.0,
+    r: Math.random() * 2 + 1,
+  };
+}
+
+// Radar (for style 3)
+let radarAngle = 0;
+const radarBlips = [];
+function mkBlip() {
+  const a = Math.random() * Math.PI * 2;
+  const d = Math.random() * Math.min(W,H) * .4;
+  return {
+    x: W/2 + Math.cos(a)*d,
+    y: H/2 + Math.sin(a)*d,
+    life: 1.0,
+  };
+}
+for (let i = 0; i < 8; i++) radarBlips.push(mkBlip());
+
+// ── Blend helper ──────────────────────────────────────────────────
+function lerpColor(a, b, t) {
+  // a, b are hex strings like '#rrggbb' or 'rgba(r,g,b,'
+  // Simple: just return target when blended enough
+  return t >= .5 ? b : a;
+}
+
+// ── Speed scale ───────────────────────────────────────────────────
+function speedScale() {
+  if (mode === 'attack') return 1.8 + intensity * 2.5;
+  if (mode === 'active') return 1.0 + intensity * 0.8;
+  return 0.35 + intensity * 0.25;
+}
+
+// ── Particle count target ─────────────────────────────────────────
+function targetCount() {
+  if (mode === 'attack') return Math.floor(80 + intensity * 100);
+  if (mode === 'active') return Math.floor(50 + intensity * 40);
+  return Math.floor(30 + intensity * 20);
+}
+
+// ── Draw functions ─────────────────────────────────────────────────
+
+function drawStyle0(dt) {
+  // Particle network
+  const spd = speedScale();
+  const con = mode === 'attack' ? 80 : mode === 'active' ? 110 : 140;
+
+  // Manage particle count
+  while (particles.length < targetCount()) particles.push(mkParticle());
+  if (particles.length > MAX_PARTICLES) particles.splice(0, particles.length - MAX_PARTICLES);
+
+  // Update + draw particles
+  ctx.save();
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * spd;
+    p.y += p.vy * spd;
+    p.pulse += 0.05 * spd;
+    p.life -= p.decay;
+    if (p.life <= 0 || p.x < -50 || p.x > W+50 || p.y < -50 || p.y > H+50) {
+      particles[i] = mkParticle();
+      continue;
+    }
+
+    const alpha = p.life * (.6 + .4 * Math.sin(p.pulse));
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+    ctx.fillStyle = palette.primary + hexA(alpha * .9);
+    ctx.shadowColor = palette.accent;
+    ctx.shadowBlur = 6;
+    ctx.fill();
+  }
+
+  // Draw connections
+  ctx.shadowBlur = 0;
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i+1; j < particles.length; j++) {
+      const dx = particles[i].x - particles[j].x;
+      const dy = particles[i].y - particles[j].y;
+      const d  = Math.sqrt(dx*dx + dy*dy);
+      if (d < con) {
+        const alpha = (1 - d/con) * .25 * Math.min(particles[i].life, particles[j].life);
+        ctx.beginPath();
+        ctx.moveTo(particles[i].x, particles[i].y);
+        ctx.lineTo(particles[j].x, particles[j].y);
+        ctx.strokeStyle = palette.accent + hexA(alpha);
+        ctx.lineWidth = .5;
+        ctx.stroke();
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function drawStyle1(dt) {
+  // Pulse rings from center
+  const spd = speedScale();
+  const emitRate = mode === 'attack' ? 0.03 : mode === 'active' ? 0.015 : 0.007;
+
+  if (Math.random() < emitRate * spd * 2) rings.push(mkRing());
+  while (rings.length > 20) rings.shift();
+
+  ctx.save();
+  for (let i = rings.length - 1; i >= 0; i--) {
+    const ring = rings[i];
+    ring.r += (3 + spd * 4) * dt * 60;
+    ring.life -= ring.decay * spd;
+    if (ring.life <= 0 || ring.r > ring.maxR) { rings.splice(i, 1); continue; }
+
+    const alpha = ring.life * .4;
+    ctx.beginPath();
+    ctx.arc(W/2, H/2, ring.r, 0, Math.PI*2);
+    ctx.strokeStyle = palette.primary + hexA(alpha);
+    ctx.lineWidth = 1.5;
+    ctx.shadowColor = palette.glow + '0.5)';
+    ctx.shadowBlur = 8;
+    ctx.stroke();
+
+    // Secondary faint ring
+    if (ring.r > 20) {
+      ctx.beginPath();
+      ctx.arc(W/2, H/2, ring.r * .85, 0, Math.PI*2);
+      ctx.strokeStyle = palette.accent + hexA(alpha * .3);
+      ctx.lineWidth = .5;
+      ctx.shadowBlur = 0;
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawStyle2(dt) {
+  // Particle streams converging to center
+  const spd = speedScale();
+  const emitRate = mode === 'attack' ? 0.4 : mode === 'active' ? 0.2 : 0.08;
+
+  if (Math.random() < emitRate) streams.push(mkStream());
+  while (streams.length > 60) streams.shift();
+
+  ctx.save();
+  for (let i = streams.length - 1; i >= 0; i--) {
+    const s = streams[i];
+    s.t += s.speed * spd;
+    s.life = 1 - s.t;
+    if (s.t >= 1) { streams.splice(i, 1); continue; }
+
+    const cx = s.x + (s.tx - s.x) * s.t;
+    const cy = s.y + (s.ty - s.y) * s.t;
+    const alpha = s.life * .8;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, s.r * s.life + .5, 0, Math.PI*2);
+    ctx.fillStyle = palette.primary + hexA(alpha);
+    ctx.shadowColor = palette.accent;
+    ctx.shadowBlur = 4;
+    ctx.fill();
+
+    // Trail
+    const prevT = Math.max(0, s.t - .06);
+    const px = s.x + (s.tx - s.x) * prevT;
+    const py = s.y + (s.ty - s.y) * prevT;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(cx, cy);
+    ctx.strokeStyle = palette.accent + hexA(alpha * .3);
+    ctx.lineWidth = .8;
+    ctx.shadowBlur = 0;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawStyle3(dt) {
+  // Radar sweep
+  const spd = speedScale();
+  radarAngle += 0.015 * spd;
+
+  const R = Math.min(W, H) * .38;
+  const cx = W/2, cy = H/2;
+
+  ctx.save();
+
+  // Radar circles
+  for (let i = 1; i <= 4; i++) {
+    const r = R * i / 4;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI*2);
+    ctx.strokeStyle = palette.primary + '22';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  // Cross-hairs
+  ctx.strokeStyle = palette.primary + '22';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx-R, cy); ctx.lineTo(cx+R, cy); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx, cy-R); ctx.lineTo(cx, cy+R); ctx.stroke();
+
+  // Sweep pie-slice
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(radarAngle);
+  const sweepGrad = ctx.createLinearGradient(0, 0, R, 0);
+  sweepGrad.addColorStop(0, palette.glow + '0)');
+  sweepGrad.addColorStop(.6, palette.glow + '0.04)');
+  sweepGrad.addColorStop(1, palette.glow + '0.25)');
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.arc(0, 0, R, -0.6, 0);
+  ctx.closePath();
+  ctx.fillStyle = sweepGrad;
+  ctx.shadowColor = palette.accent;
+  ctx.shadowBlur = 20;
+  ctx.fill();
+  ctx.restore();
+
+  // Sweep line
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(Math.cos(radarAngle) * R, Math.sin(radarAngle) * R);
+  ctx.strokeStyle = palette.accent + 'cc';
+  ctx.lineWidth = 1.5;
+  ctx.shadowColor = palette.accent;
+  ctx.shadowBlur = 8;
+  ctx.stroke();
+  ctx.restore();
+
+  // Blips
+  if (Math.random() < 0.02) {
+    radarBlips.push(mkBlip());
+    if (radarBlips.length > 12) radarBlips.shift();
+  }
+  for (const blip of radarBlips) {
+    blip.life = Math.max(0, blip.life - .004);
+    const a = blip.life * .9;
+    ctx.beginPath();
+    ctx.arc(blip.x, blip.y, 3, 0, Math.PI*2);
+    ctx.fillStyle = palette.accent + hexA(a);
+    ctx.shadowColor = palette.accent;
+    ctx.shadowBlur = 10;
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// ── Central glow ──────────────────────────────────────────────────
+function drawCenterGlow() {
+  const r = Math.min(W, H) * .25;
+  const pulse = .6 + .4 * Math.sin(Date.now() / (mode === 'attack' ? 250 : mode === 'active' ? 500 : 1200));
+  const grad = ctx.createRadialGradient(W/2, H/2, 0, W/2, H/2, r);
+  const baseAlpha = mode === 'attack' ? .18 : mode === 'active' ? .12 : .07;
+  grad.addColorStop(0, palette.glow + (baseAlpha * pulse * 1.5) + ')');
+  grad.addColorStop(.4, palette.glow + (baseAlpha * pulse * .5) + ')');
+  grad.addColorStop(1, palette.glow + '0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+}
+
+// ── Attack glitch overlay ─────────────────────────────────────────
+let glitchTimer = 0;
+function drawAttackFX() {
+  if (mode !== 'attack') return;
+  glitchTimer += intensity * .05;
+  if (Math.sin(glitchTimer * 7) > .85) {
+    const y = Math.random() * H;
+    const h = Math.random() * 4 + 1;
+    const shift = (Math.random() - .5) * 20 * intensity;
+    ctx.save();
+    ctx.globalAlpha = .15 * intensity;
+    ctx.drawImage(canvas, shift, y, W, h, 0, y, W, h);
+    ctx.restore();
+  }
+  // Vignette pulse
+  const vg = ctx.createRadialGradient(W/2, H/2, H*.3, W/2, H/2, H*.8);
+  const va = .3 * intensity * (Math.random() * .2 + .8);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, `rgba(180,10,0,${va})`);
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, W, H);
+}
+
+// ── Main render loop ──────────────────────────────────────────────
+let lastTime = 0;
+function render(now) {
+  const dt = Math.min((now - lastTime) / 1000, .05);
+  lastTime = now;
+
+  // Background
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = palette.bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle hex grid
+  drawGrid();
+
+  // Center glow
+  drawCenterGlow();
+
+  // Active style
+  switch (style) {
+    case 0: drawStyle0(dt); break;
+    case 1: drawStyle1(dt); break;
+    case 2: drawStyle2(dt); break;
+    case 3: drawStyle3(dt); break;
+  }
+
+  // Attack FX
+  drawAttackFX();
+
+  requestAnimationFrame(render);
+}
+
+function drawGrid() {
+  const sz = 40;
+  ctx.save();
+  ctx.strokeStyle = palette.primary + '0a';
+  ctx.lineWidth = .5;
+  for (let x = 0; x < W; x += sz) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += sz) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function hexA(alpha) {
+  const a = Math.max(0, Math.min(1, alpha));
+  return Math.round(a * 255).toString(16).padStart(2, '0');
+}
+
+requestAnimationFrame(render);
+
+// ═══════════════════════════════════════════════════════════════════
+// HUD UPDATES
+// ═══════════════════════════════════════════════════════════════════
+
+const el = id => document.getElementById(id);
+
+// Apply palette to HUD
+function applyPalette(pal) {
+  const c = pal.text;
+  el('level-num').style.color = c;
+  el('level-bar').style.background = c;
+  el('level-bar').style.color = c;
+  el('title-main').style.color = c;
+  el('net-ip').style.color = c;
+  el('recv-val').style.color = c;
+  el('sent-val').style.color = c;
+  document.querySelectorAll('.traffic-bar').forEach(b => {
+    b.style.background = c;
+    b.style.color = c;
+  });
+  el('mode-label').style.color = c;
+  el('mode-label').style.borderColor = c;
+  el('mode-label').style.boxShadow = `0 0 10px ${c}`;
+}
+
+let prevMode = '';
+let modeTimeout = null;
+
+// Logarithmic bar width (0-100%) for a bytes/sec value
+// 100 MB/s = 100%, using log scale for better visualization
+function logBarWidth(bps) {
+  if (bps <= 0) return 0;
+  const logMax = Math.log10(100_000_000); // 100 MB/s = max
+  const logVal = Math.log10(Math.max(1, bps));
+  return Math.min(100, (logVal / logMax) * 100);
+}
+
+function updateHUD(data) {
+  // Mode change
+  if (data.animation_mode !== prevMode) {
+    prevMode = data.animation_mode;
+    mode = data.animation_mode;
+    palette = PALETTES[mode] || PALETTES.idle;
+    applyPalette(palette);
+
+    const labels = { idle: 'IDLE', active: 'ACTIVE', attack: '⚡ STORM' };
+    el('mode-label').textContent = labels[mode] || mode.toUpperCase();
+    el('mode-label').style.opacity = '1';
+    if (modeTimeout) clearTimeout(modeTimeout);
+    modeTimeout = setTimeout(() => { el('mode-label').style.opacity = '0'; }, 3000);
+  }
+
+  style     = data.animation_style || 0;
+  intensity = data.animation_intensity || 0;
+
+  // Level
+  el('level-num').textContent = data.level || 1;
+  el('level-bar').style.width = ((data.level_progress || 0) * 100).toFixed(1) + '%';
+
+  // Network info
+  el('net-ip').textContent  = data.current_ip  || '—.—.—.—';
+  el('net-ssid').textContent = data.current_ssid
+    ? '📡 ' + data.current_ssid
+    : (data.connection_type === 'ethernet' ? '🔌 ETHERNET' : '⚠ NO NETWORK');
+  el('net-type').textContent = (data.connection_type || 'UNKNOWN').toUpperCase();
+
+  // Traffic bars
+  el('recv-val').textContent = data.recv_rate_human || '0 B/s';
+  el('sent-val').textContent = data.sent_rate_human || '0 B/s';
+  el('recv-bar').style.width = logBarWidth(data.recv_rate).toFixed(1) + '%';
+  el('sent-bar').style.width = logBarWidth(data.sent_rate).toFixed(1) + '%';
+
+  // Stats row
+  el('stat-devices').textContent = (data.device_count || 0) + ' DEVICES';
+  el('stat-uptime').textContent  = 'UP: ' + (data.uptime_human || '0s');
+  el('stat-subnet').textContent  = data.subnet || data.vlan_subnets?.[0] || '—';
+
+  // Connection dot
+  const dot = el('conn-dot');
+  const connText = el('stat-conn');
+  if (data.connection_type === 'ethernet') {
+    dot.className = 'connected';
+    connText.innerHTML = '<span id="conn-dot" class="connected"></span>ETHERNET';
+  } else if (data.connection_type === 'wifi') {
+    dot.className = 'connected';
+    connText.innerHTML = '<span id="conn-dot" class="connected"></span>WIFI';
+  } else if (data.connection_type === 'ap') {
+    dot.className = 'ap';
+    connText.innerHTML = '<span id="conn-dot" class="ap"></span>AP MODE';
+  } else {
+    dot.className = 'disconnected';
+    connText.innerHTML = '<span id="conn-dot" class="disconnected"></span>OFFLINE';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DEVICES PANEL
+// ═══════════════════════════════════════════════════════════════════
+
+function updateDevices(devices) {
+  const list = el('devices-list');
+  if (!devices || !devices.length) {
+    list.innerHTML = '<div class="device-item" style="opacity:.4">No devices found</div>';
+    return;
+  }
+  list.innerHTML = devices.map(d => `
+    <div class="device-item">
+      <div class="device-ip">${d.ip}</div>
+      ${d.mac ? `<div class="device-mac">${d.mac}</div>` : ''}
+      ${d.hostname ? `<div class="device-host">${d.hostname}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+el('toggle-devices').addEventListener('click', () => {
+  el('devices-panel').classList.toggle('open');
+});
+el('devices-close').addEventListener('click', () => {
+  el('devices-panel').classList.remove('open');
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// SOCKET.IO CONNECTION
+// ═══════════════════════════════════════════════════════════════════
+
+const socket = io({
+  transports: ['websocket', 'polling'],
+  reconnectionAttempts: Infinity,
+  reconnectionDelay: 1000,
+});
+
+socket.on('connect', () => {
+  console.log('Connected to Ragnar server');
+});
+
+socket.on('disconnect', () => {
+  prevMode = '';
+  el('mode-label').textContent = 'DISCONNECTED';
+  el('mode-label').style.opacity = '1';
+});
+
+socket.on('status_update', data => {
+  updateHUD(data);
+  if (data.devices && data.devices.length) {
+    updateDevices(data.devices);
+    el('devices-header').querySelector('span').textContent =
+      'NETWORK DEVICES (' + data.device_count + ')';
+  }
+});
+
+// ── Scan button ────────────────────────────────────────────────────
+el('scan-btn').addEventListener('click', () => {
+  socket.emit('request_scan');
+  el('scan-btn').textContent = '⟳ SCANNING...';
+  el('scan-btn').style.pointerEvents = 'none';
+  setTimeout(() => {
+    el('scan-btn').textContent = '⟳ SCAN';
+    el('scan-btn').style.pointerEvents = 'auto';
+  }, 5000);
+});
+
+// ── Fallback polling if socket not available ───────────────────────
+let pollInterval = null;
+socket.on('connect_error', () => {
+  if (!pollInterval) {
+    pollInterval = setInterval(async () => {
+      try {
+        const r = await fetch('/api/status');
+        const d = await r.json();
+        updateHUD(d);
+      } catch(e) {}
+    }, 2000);
+  }
+});
+socket.on('connect', () => {
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+});
+</script>
+</body>
+</html>
