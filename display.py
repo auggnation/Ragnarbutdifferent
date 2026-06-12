@@ -2948,7 +2948,7 @@ class Display:
                 # ════════════════════════════════════════════════════════
                 # TIME LINE — right below name/level, above Viking
                 # ════════════════════════════════════════════════════════
-                _header_h = int(H * 0.115)   # ~14 px — bottom of name row
+                _header_h = int(H * 0.082)   # ~10 px — compact name row
                 try:
                     from zoneinfo import ZoneInfo as _ZI
                     _tz_name = getattr(self.shared_data, 'config', {}).get('timezone', '')
@@ -2959,12 +2959,12 @@ class Display:
                 _time_str = _now_t.strftime('%H:%M  %a %d %b')
                 draw.text((int(4 * sx), _header_h + int(1 * sy)), _time_str,
                           font=self.shared_data.font_arial9, fill=0)
-                _viking_start = _header_h + int(11 * sy)   # ~19 px
+                _viking_start = _header_h + int(8 * sy)   # ~14 px (moved up ~5 px)
 
                 # ════════════════════════════════════════════════════════
-                # VIKING IMAGE — taller, starts below time line
+                # VIKING IMAGE — same height, shifted up ~5 px
                 # ════════════════════════════════════════════════════════
-                _img_end = int(H * 0.695)   # ~85 px (was 0.60 = 73 px)
+                _img_end = int(H * 0.655)   # ~80 px (was 0.695 = 85 px)
 
                 if display_image is not None:
                     _max_h = max(1, _img_end - _viking_start)

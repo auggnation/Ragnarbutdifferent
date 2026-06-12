@@ -763,28 +763,37 @@ class TrafficMonitor:
 
             # Method 3: urllib download timing — no external deps needed
             if not (dl > 0 or ul > 0):
-                try:
-                    import urllib.request
-                    # 10 MB Cloudflare test file
-                    req = urllib.request.Request(
-                        'https://speed.cloudflare.com/__down?bytes=10000000',
-                        headers={'User-Agent': 'mild-viking-speedtest/1.0'}
-                    )
-                    t0 = time.monotonic()
-                    with urllib.request.urlopen(req, timeout=40) as resp:
-                        chunk_size = 65536
-                        received   = 0
-                        while True:
-                            chunk = resp.read(chunk_size)
-                            if not chunk:
-                                break
-                            received += len(chunk)
-                    elapsed = time.monotonic() - t0
-                    if elapsed > 0 and received > 0:
-                        dl = (received * 8) / elapsed / 1_000_000  # Mbps
-                        logger.info(f"Speed test (urllib fallback): ↓{dl:.1f} Mbps")
-                except Exception as exc:
-                    logger.warning(f"urllib speedtest fallback failed: {exc}")
+                import urllib.request, ssl as _ssl
+                _ctx = _ssl.create_default_context()
+                _ctx.check_hostname = False
+                _ctx.verify_mode    = _ssl.CERT_NONE
+                # Try plain HTTP first (no SSL issues), then HTTPS fallback
+                _test_urls = [
+                    'http://proof.ovh.net/files/10Mb.dat',
+                    'http://speedtest.tele2.net/10MB.zip',
+                    'https://speed.cloudflare.com/__down?bytes=10000000',
+                ]
+                for _url in _test_urls:
+                    try:
+                        _req = urllib.request.Request(
+                            _url, headers={'User-Agent': 'mild-viking-speedtest/1.0'})
+                        _kw  = {'context': _ctx} if _url.startswith('https') else {}
+                        t0   = time.monotonic()
+                        _rcv = 0
+                        with urllib.request.urlopen(_req, timeout=40, **_kw) as _resp:
+                            while True:
+                                _chunk = _resp.read(65536)
+                                if not _chunk:
+                                    break
+                                _rcv += len(_chunk)
+                        _el = time.monotonic() - t0
+                        if _el > 0 and _rcv > 100_000:   # at least 100 KB received
+                            dl = (_rcv * 8) / _el / 1_000_000
+                            logger.info(f"Speed test (urllib {_url}): ↓{dl:.1f} Mbps")
+                            break
+                    except Exception as _exc:
+                        logger.debug(f"urllib speedtest {_url}: {_exc}")
+                        continue
         except Exception as exc:
             logger.warning(f"Speed test failed: {exc}")
 
