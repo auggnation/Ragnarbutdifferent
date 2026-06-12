@@ -18,47 +18,49 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 
 /* ── Top bar ─────────────────────────────────────────────────── */
 #top-bar{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:14px 20px 10px;
-  background:linear-gradient(180deg,rgba(0,0,0,.85) 0%,transparent 100%);
-  gap:12px;
-}
-#level-badge{
-  display:flex;flex-direction:column;align-items:center;
-  min-width:90px;
-}
-#level-text{font-size:11px;letter-spacing:3px;opacity:.7;text-transform:uppercase}
-#level-num{font-size:28px;font-weight:700;letter-spacing:2px;line-height:1;text-shadow:0 0 12px currentColor}
-#level-bar-wrap{width:80px;height:4px;background:rgba(255,255,255,.1);border-radius:2px;margin-top:3px;overflow:hidden}
-#level-bar{height:100%;border-radius:2px;transition:width .5s ease;box-shadow:0 0 6px currentColor}
-/* ── Top-left action panel (outside HUD — always clickable) ──── */
-#tl-panel{
-  position:fixed;left:14px;top:82px;z-index:20;
-  display:flex;flex-direction:column;align-items:flex-start;gap:5px;
+  display:flex;align-items:center;
+  padding:10px 16px;gap:10px;
+  background:rgba(0,0,0,.88);border-bottom:1px solid rgba(255,255,255,.08);
   pointer-events:all;
 }
-#tl-speed{
-  font-size:9px;letter-spacing:1px;opacity:.6;min-height:12px;
-  font-family:'Courier New',monospace;
+#title-main{
+  font-size:18px;letter-spacing:6px;font-weight:700;
+  text-transform:uppercase;text-shadow:0 0 16px currentColor;
+  white-space:nowrap;flex-shrink:0;
 }
-.tl-btn{
+
+/* ── Top action buttons ───────────────────────────────────────── */
+#top-actions{
+  display:flex;gap:6px;flex:1;justify-content:center;flex-wrap:wrap;
+}
+.top-btn{
   font-family:'Courier New',monospace;font-size:9px;letter-spacing:2px;
-  text-transform:uppercase;padding:5px 12px;
+  text-transform:uppercase;padding:6px 13px;
   border:1px solid rgba(255,255,255,.25);
-  background:rgba(0,0,0,.55);color:rgba(255,255,255,.55);
-  cursor:pointer;text-decoration:none;display:block;width:100%;
-  text-align:center;transition:all .2s;
+  background:rgba(0,0,0,.5);color:rgba(255,255,255,.6);
+  cursor:pointer;text-decoration:none;white-space:nowrap;
+  transition:all .2s;display:inline-block;
 }
-.tl-btn:hover{border-color:rgba(255,255,255,.65);color:#fff;background:rgba(0,0,0,.75)}
+.top-btn:hover{border-color:rgba(255,255,255,.7);color:#fff;background:rgba(255,255,255,.05)}
+.top-btn.active{border-color:currentColor;color:currentColor}
 
-#title-center{text-align:center;flex:1}
-#title-main{font-size:22px;letter-spacing:8px;font-weight:700;text-transform:uppercase;text-shadow:0 0 20px currentColor}
-#title-sub{font-size:10px;letter-spacing:4px;opacity:.5;margin-top:2px;text-transform:uppercase}
+#level-badge{
+  display:flex;flex-direction:column;align-items:center;
+  flex-shrink:0;min-width:80px;
+}
+#level-text{font-size:10px;letter-spacing:3px;opacity:.6;text-transform:uppercase}
+#level-num{font-size:24px;font-weight:700;letter-spacing:2px;line-height:1;text-shadow:0 0 12px currentColor}
+#level-bar-wrap{width:70px;height:3px;background:rgba(255,255,255,.1);border-radius:2px;margin-top:3px;overflow:hidden}
+#level-bar{height:100%;border-radius:2px;transition:width .5s ease;box-shadow:0 0 6px currentColor}
 
-#net-info{text-align:right;min-width:140px}
-#net-ip{font-size:15px;font-weight:700;letter-spacing:1px;text-shadow:0 0 8px currentColor}
-#net-ssid{font-size:11px;opacity:.65;margin-top:3px;letter-spacing:1px}
-#net-type{font-size:10px;opacity:.45;margin-top:2px;letter-spacing:2px;text-transform:uppercase}
+/* ── Net info row in bottom bar ──────────────────────────────── */
+#net-row{display:flex;align-items:baseline;gap:16px;margin-bottom:6px;opacity:.8}
+#net-ip{font-size:14px;font-weight:700;letter-spacing:1px;text-shadow:0 0 8px currentColor}
+#net-ssid{font-size:11px;opacity:.65;letter-spacing:1px}
+#net-type{font-size:10px;opacity:.45;letter-spacing:2px;text-transform:uppercase}
+
+/* hidden tl-speed (kept so JS writes don't error; stat-speed shows same info) */
+#tl-speed{display:none}
 
 /* ── Center overlay (mode label) ─────────────────────────────── */
 #center-overlay{
@@ -91,17 +93,12 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 #stat-subnet{font-size:11px;letter-spacing:1px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #stat-conn{font-size:11px;letter-spacing:2px}
 
-/* ── Corner buttons ───────────────────────────────────────────── */
-.corner-btn{
-  position:fixed;z-index:20;pointer-events:all;cursor:pointer;
-  font-size:10px;letter-spacing:3px;text-transform:uppercase;
-  padding:6px 14px;border:1px solid rgba(255,255,255,.3);
-  background:rgba(0,0,0,.5);color:rgba(255,255,255,.6);
-  transition:all .2s;
+/* speedtest-status overlay near top bar */
+#speedtest-status{
+  position:fixed;top:56px;right:16px;z-index:20;
+  font-size:9px;letter-spacing:2px;text-transform:uppercase;
+  opacity:0;transition:opacity .3s;pointer-events:none;
 }
-.corner-btn:hover{border-color:currentColor;color:#fff;text-shadow:0 0 8px #fff;box-shadow:0 0 10px rgba(255,255,255,.2)}
-#scan-btn{bottom:14px;right:20px}
-#speedtest-btn{bottom:14px;right:100px}
 
 /* ── Settings & password modals ───────────────────────────────── */
 .mv-modal-overlay{
@@ -131,21 +128,18 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 .mv-btn:hover{border-color:#fff;color:#fff}
 .mv-btn.primary{border-color:currentColor;color:#fff}
 .mv-msg{font-size:10px;letter-spacing:1px;margin-top:10px;opacity:.6;min-height:14px}
-#speedtest-status{
-  position:fixed;bottom:44px;right:100px;z-index:20;
-  font-size:9px;letter-spacing:2px;text-transform:uppercase;
-  opacity:0;transition:opacity .3s;pointer-events:none;
-}
 
-/* ── E-paper screen viewer (always visible, center-left) ─────── */
+/* ── E-paper screen viewer (left side, toggleable) ───────────── */
 #screen-panel{
-  position:fixed;left:10px;top:50%;transform:translateY(-50%);
-  z-index:15;background:rgba(0,0,0,.85);border:1px solid rgba(255,255,255,.15);
-  pointer-events:all;padding:8px;display:flex;flex-direction:column;
-  align-items:center;gap:6px;min-width:120px;
+  position:fixed;left:0;top:50%;transform:translateY(-50%) translateX(-100%);
+  z-index:18;background:rgba(0,0,0,.92);border:1px solid rgba(255,255,255,.15);
+  border-left:none;transition:transform .3s ease;pointer-events:all;
+  padding:10px;display:flex;flex-direction:column;align-items:center;gap:8px;
+  min-width:140px;
 }
+#screen-panel.open{transform:translateY(-50%) translateX(0)}
 #screen-panel img{
-  image-rendering:pixelated;max-width:180px;width:100%;
+  image-rendering:pixelated;max-width:200px;width:100%;
   border:1px solid rgba(255,255,255,.1);
 }
 #screen-panel-label{font-size:8px;letter-spacing:3px;opacity:.4;text-transform:uppercase}
@@ -197,21 +191,20 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 
 <!-- ── HUD ── -->
 <div id="hud">
-  <!-- Top bar -->
+  <!-- Top bar: name | action buttons | level -->
   <div id="top-bar">
+    <div id="title-main">MILD-VIKING</div>
+    <div id="top-actions">
+      <button class="top-btn" id="toggle-vlans">⊟ VLANS</button>
+      <button class="top-btn" id="scan-btn">⟳ SCAN</button>
+      <button class="top-btn" id="speedtest-btn">⚡ SPEEDTEST</button>
+      <a class="top-btn" href="/settings">⚙ SETTINGS</a>
+      <button class="top-btn" id="screen-toggle">📺 SCREEN</button>
+    </div>
     <div id="level-badge">
       <div id="level-text">LEVEL</div>
       <div id="level-num">1</div>
       <div id="level-bar-wrap"><div id="level-bar" style="width:0%"></div></div>
-    </div>
-    <div id="title-center">
-      <div id="title-main">MILD-VIKING</div>
-      <div id="title-sub">NETWORK MONITOR</div>
-    </div>
-    <div id="net-info">
-      <div id="net-ip">—.—.—.—</div>
-      <div id="net-ssid">Scanning...</div>
-      <div id="net-type">UNKNOWN</div>
     </div>
   </div>
 
@@ -220,8 +213,13 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
     <div id="mode-label">IDLE</div>
   </div>
 
-  <!-- Bottom bar -->
+  <!-- Bottom bar: net info + traffic + stats -->
   <div id="bottom-bar">
+    <div id="net-row">
+      <span id="net-ip">—.—.—.—</span>
+      <span id="net-ssid">Scanning…</span>
+      <span id="net-type">UNKNOWN</span>
+    </div>
     <div id="traffic-row">
       <div class="traffic-block">
         <div class="traffic-label">↓ INBOUND</div>
@@ -243,6 +241,8 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
     </div>
   </div>
 </div>
+<!-- hidden tl-speed so JS writes don't throw -->
+<div id="tl-speed" style="display:none"></div>
 
 <!-- ── VLANs panel (left slide-in) ── -->
 <div id="vlans-panel">
@@ -253,19 +253,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
   <div id="vlans-list"></div>
 </div>
 
-<!-- ── Top-left action panel (outside HUD, always clickable) ── -->
-<div id="tl-panel">
-  <div id="tl-speed"></div>
-  <button id="toggle-vlans" class="tl-btn">⊟ VLANS</button>
-  <a id="settings-link" class="tl-btn" href="/settings">⚙ SETTINGS</a>
-</div>
-
-<!-- ── Corner buttons ── -->
-<button id="scan-btn" class="corner-btn">⟳ SCAN</button>
-<button id="speedtest-btn" class="corner-btn">⚡ SPEEDTEST</button>
 <div id="speedtest-status"></div>
 
-<!-- ── E-paper screen viewer (always visible) ── -->
+<!-- ── E-paper screen viewer (left side toggle) ── -->
 <div id="screen-panel">
   <div id="screen-panel-label">DEVICE SCREEN</div>
   <img id="screen-img" src="/web/screen.png" alt="device screen">
@@ -1124,10 +1114,16 @@ socket.on('speedtest_result', data => {
   }
 });
 
-// ── Screen viewer — always visible, refresh every 3s ─────────────
+// ── Screen viewer toggle ───────────────────────────────────────────
+el('screen-toggle').addEventListener('click', () => {
+  el('screen-panel').classList.toggle('open');
+  el('screen-toggle').classList.toggle('active');
+});
+// Refresh e-paper image every 3s when panel is open
 setInterval(() => {
-  const img = el('screen-img');
-  img.src = '/web/screen.png?t=' + Date.now();
+  if (el('screen-panel').classList.contains('open')) {
+    el('screen-img').src = '/web/screen.png?t=' + Date.now();
+  }
 }, 3000);
 
 // ── Password gate ──────────────────────────────────────────────────

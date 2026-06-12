@@ -220,23 +220,13 @@ chown -R "${RAGNAR_USER}:${RAGNAR_USER}" "$VENV_PATH"
 ok "Python packages installed"
 
 # ═══════════════════════════════════════════════════════════════════
-header "STEP 5 / 7  WiFi management service"
+header "STEP 5 / 7  Network management"
 # ═══════════════════════════════════════════════════════════════════
 
-# Install WiFi management if script exists
-WIFI_SCRIPT="${RAGNAR_PATH}/install_wifi_management.sh"
-if [ -f "$WIFI_SCRIPT" ]; then
-    info "Running WiFi management installer..."
-    chmod +x "$WIFI_SCRIPT"
-    bash "$WIFI_SCRIPT" >> "$LOG_FILE" 2>&1 || warn "WiFi management installer had warnings (continuing)"
-    ok "WiFi management configured"
-else
-    warn "WiFi management installer not found — configure WiFi manually via the web interface"
-fi
-
-# Ensure NetworkManager is running
+# Ensure NetworkManager is running (used for WiFi scanning/connect via web UI)
 systemctl enable NetworkManager 2>/dev/null || true
 systemctl start  NetworkManager 2>/dev/null || true
+ok "NetworkManager enabled — WiFi networks are managed via the web Settings page"
 
 # ═══════════════════════════════════════════════════════════════════
 header "STEP 6 / 7  Systemd service"
