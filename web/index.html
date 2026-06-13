@@ -176,7 +176,19 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 }
 
 /* ── Device bubble canvas ─────────────────────────────────────── */
-#bubbles{position:fixed;inset:0;width:100%;height:100%;z-index:2;pointer-events:none}
+#bubbles{position:fixed;inset:0;width:100%;height:100%;z-index:2;pointer-events:auto;cursor:crosshair}
+
+/* ── Device tooltip card ──────────────────────────────────────── */
+#dev-tooltip{
+  display:none;position:fixed;z-index:30;
+  background:rgba(0,0,0,.82);border:1px solid rgba(255,255,255,.18);
+  backdrop-filter:blur(6px);border-radius:6px;
+  padding:8px 12px;pointer-events:none;
+  font-family:'Courier New',monospace;font-size:11px;
+  color:#b0ffb0;line-height:1.7;white-space:nowrap;
+}
+#dev-tooltip .dt-host{font-size:13px;font-weight:bold;color:#fff;margin-bottom:2px}
+#dev-tooltip .dt-row{opacity:.85}
 
 /* ── Scanlines overlay ────────────────────────────────────────── */
 #scanlines{
@@ -198,6 +210,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 
 <canvas id="bg"></canvas>
 <canvas id="bubbles"></canvas>
+<div id="dev-tooltip"></div>
 <div id="scanlines"></div>
 
 <!-- ── HUD ── -->
@@ -826,6 +839,14 @@ requestAnimationFrame(render);
 
 const el = id => document.getElementById(id);
 
+// Seed palette from local time so there's no flash before weather loads
+(function() {
+  const h = new Date().getHours();
+  if      (h >= 21 || h < 6)  _applyWeatherPalette('night');
+  else if (h < 7  || h >= 20) _applyWeatherPalette('twilight');
+  else                         _applyWeatherPalette('sunny');
+})();
+
 // Apply palette to HUD
 function applyPalette(pal) {
   const c = pal.text;
@@ -953,7 +974,7 @@ function updateBubbles(devices) {
 
     if (!_bubbleNodes[ip]) {
       _bubbleNodes[ip] = {
-        ip, mac: d.mac || '', label: d.hostname || ip,
+        ip, mac: d.mac || '', hostname: d.hostname || '', label: d.hostname || ip,
         x: W * 0.15 + Math.random() * W * 0.70,
         y: H * 0.20 + Math.random() * H * 0.60,
         vx: (Math.random() - 0.5) * 0.4,
@@ -969,6 +990,7 @@ function updateBubbles(devices) {
       n.targetR     = targetR;
       n.rateIn      = d.rate_in  || 0;
       n.rateOut     = d.rate_out || 0;
+      n.hostname    = d.hostname || n.hostname || '';
       n.connections = d.connections || 0;
       n.label       = d.hostname || ip;
       n.mac         = d.mac || n.mac || '';
@@ -1076,6 +1098,18 @@ function _drawBubbles(ts) {
     bctx.fillStyle = hiGrad;
     bctx.fill();
 
+    // Hostname label above sphere
+    const hostLabel = (n.hostname && n.hostname !== n.ip)
+      ? (n.hostname.length > 14 ? n.hostname.slice(0, 13) + '…' : n.hostname)
+      : '';
+    if (hostLabel) {
+      bctx.font = `bold 9px 'Courier New', monospace`;
+      bctx.fillStyle = '#ffffff';
+      bctx.textAlign = 'center';
+      bctx.textBaseline = 'bottom';
+      bctx.fillText(hostLabel, n.x, n.y - n.r - 3);
+    }
+
     // IP label inside sphere (last 2 octets, prominent)
     const fontSize = Math.max(9, Math.min(14, n.r * 0.58));
     bctx.fillStyle = '#ffffff';
@@ -1084,25 +1118,59 @@ function _drawBubbles(ts) {
     bctx.textBaseline = 'middle';
     bctx.fillText(n.ip.split('.').slice(-2).join('.'), n.x, n.y);
 
-    // Labels below sphere: MAC vendor prefix + traffic rates
+    // Labels below sphere: full MAC + data rate (always shown)
     const labelY = n.y + n.r + 10;
     bctx.font = '8px \'Courier New\', monospace';
     bctx.fillStyle = pal.accent || pal.primary;
     bctx.textBaseline = 'top';
-    const macShort = n.mac ? n.mac.split(':').slice(0, 3).join(':') : '';
-    let labelOffset = 0;
-    if (macShort) {
-      bctx.fillText(macShort, n.x, labelY);
-      labelOffset = 11;
+    if (n.mac) {
+      bctx.fillText(n.mac, n.x, labelY);
     }
-    if (n.rateIn > 500 || n.rateOut > 500) {
-      bctx.fillText(`↓${_fmtRate(n.rateIn)} ↑${_fmtRate(n.rateOut)}`, n.x, labelY + labelOffset);
-    }
+    const rateStr = (n.rateIn > 200 || n.rateOut > 200)
+      ? `↓${_fmtRate(n.rateIn)} ↑${_fmtRate(n.rateOut)}`
+      : `${n.ip}`;
+    bctx.fillText(rateStr, n.x, labelY + 11);
   });
 
   requestAnimationFrame(_drawBubbles);
 }
 requestAnimationFrame(_drawBubbles);
+
+// ── Bubble hover tooltip ─────────────────────────────────────────
+const _devTip = el('dev-tooltip');
+
+function _hitBubble(mx, my) {
+  for (const n of Object.values(_bubbleNodes)) {
+    const dx = mx - n.x, dy = my - n.y;
+    if (dx * dx + dy * dy <= (n.r + 12) * (n.r + 12)) return n;
+  }
+  return null;
+}
+
+bubbleCanvas.addEventListener('mousemove', e => {
+  const hit = _hitBubble(e.clientX, e.clientY);
+  if (!hit) { _devTip.style.display = 'none'; return; }
+  const totalRate = hit.rateIn + hit.rateOut;
+  const dataStr = totalRate > 200
+    ? `↓ ${_fmtRate(hit.rateIn)}/s  ↑ ${_fmtRate(hit.rateOut)}/s`
+    : '—';
+  const hostLine = (hit.hostname && hit.hostname !== hit.ip) ? hit.hostname : '—';
+  _devTip.innerHTML =
+    `<div class="dt-host">${hostLine}</div>` +
+    `<div class="dt-row">IP &nbsp;: ${hit.ip}</div>` +
+    `<div class="dt-row">MAC : ${hit.mac || '—'}</div>` +
+    `<div class="dt-row">DATA: ${dataStr}</div>`;
+  const tw = _devTip.offsetWidth, th = _devTip.offsetHeight;
+  const px = Math.min(e.clientX + 14, window.innerWidth  - tw - 10);
+  const py = Math.min(e.clientY + 14, window.innerHeight - th - 10);
+  _devTip.style.left    = px + 'px';
+  _devTip.style.top     = py + 'px';
+  _devTip.style.display = 'block';
+});
+
+bubbleCanvas.addEventListener('mouseleave', () => {
+  _devTip.style.display = 'none';
+});
 
 // ═══════════════════════════════════════════════════════════════════
 // DEVICES + VLANS PANELS
