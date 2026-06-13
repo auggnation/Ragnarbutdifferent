@@ -99,6 +99,10 @@ header "STEP 1 / 7  System packages"
 info "Updating package lists..."
 $UPDATE_CMD 2>&1 | tee -a "$LOG_FILE" || warn "Package update had warnings (continuing)"
 
+# Install git first so the clone step works even if the main install partially fails
+info "Installing git..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y git 2>&1 | tee -a "$LOG_FILE" || warn "git install failed — will use wget tarball fallback"
+
 SYSTEM_PKGS=(
     python3 python3-pip python3-venv python3-dev
     git wget curl
