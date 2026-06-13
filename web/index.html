@@ -383,6 +383,14 @@ async function fetchWeather() {
   } catch(e) { /* silent — keep current palette */ }
 }
 
+// Seed palette from local time immediately so there's no flash before weather loads
+(function() {
+  const h = new Date().getHours();
+  if      (h >= 21 || h < 6)  _applyWeatherPalette('night');
+  else if (h < 7  || h >= 20) _applyWeatherPalette('twilight');
+  else                         _applyWeatherPalette('sunny');
+})();
+
 fetchWeather();
 setInterval(fetchWeather, 30 * 60 * 1000); // refresh every 30 min
 

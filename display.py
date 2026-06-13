@@ -168,6 +168,12 @@ class Display:
         self._SUB_PAGE_INTERVAL = 5.0
         self._SUB_PAGE_COUNT = 5
 
+        # Day/night image rotation — advance every 2 minutes
+        self._day_img_idx   = 0
+        self._night_img_idx = 0
+        self._img_last_rotate = 0.0
+        self._IMG_ROTATE_S  = 120
+
     def get_frise_position(self):
         """Get the frise position based on the display type."""
         display_type = self.config.get("epd_type", "default")
@@ -2918,16 +2924,29 @@ class Display:
                     self._sub_page = (self._sub_page + 1) % self._SUB_PAGE_COUNT
                     self._sub_page_last_switch = now_t
 
-                # ── Night mode: use attack image 21:00–06:00 ────────────────────
-                _hour = datetime.now().hour
+                # ── Day / Night image selection ─────────────────────────────────
+                _hour       = datetime.now().hour
                 _night_mode = _hour >= 21 or _hour < 6
-                if high_traffic or _night_mode:
-                    display_image = self.shared_data.attack
+
+                # Advance image index every _IMG_ROTATE_S seconds
+                _now_rot = time.time()
+                if _now_rot - self._img_last_rotate >= self._IMG_ROTATE_S:
+                    self._img_last_rotate = _now_rot
+                    self._day_img_idx   = (self._day_img_idx   + 1)
+                    self._night_img_idx = (self._night_img_idx + 1)
+
+                if high_traffic:
+                    display_image = getattr(self.shared_data, 'attack', None)
+                elif _night_mode:
+                    _pool = getattr(self.shared_data, 'night_images', [])
+                    display_image = (_pool[self._night_img_idx % len(_pool)]
+                                     if _pool else getattr(self.shared_data, 'attack', None))
                 else:
-                    # mildviking.bmp is the primary Viking character image
-                    display_image = getattr(self.shared_data, 'ragnar1', None) or self.main_image
+                    _pool = getattr(self.shared_data, 'day_images', [])
+                    display_image = (_pool[self._day_img_idx % len(_pool)]
+                                     if _pool else getattr(self.shared_data, 'ragnar1', None))
                 if not display_image:
-                    display_image = getattr(self.shared_data, 'ragnarstatusimage', None)
+                    display_image = getattr(self.shared_data, 'ragnar1', None) or self.main_image
 
                 # Page indicator dots
                 def _page_dots(cur, total):

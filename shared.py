@@ -1591,6 +1591,27 @@ class SharedData:
             self.zombie_status = self.load_image(os.path.join(self.staticpicdir, 'zombie.bmp'), scale=img_scale)
             self.attack = self.load_image(os.path.join(self.staticpicdir, 'attack.bmp'), scale=img_scale)
 
+            # Load day/night image sets from staticpicdir sub-folders (case-insensitive)
+            self.day_images   = []
+            self.night_images = []
+            for _entry in os.listdir(self.staticpicdir):
+                _full = os.path.join(self.staticpicdir, _entry)
+                if not os.path.isdir(_full):
+                    continue
+                _key = _entry.lower()
+                if _key == 'day':
+                    _target = self.day_images
+                elif _key == 'night':
+                    _target = self.night_images
+                else:
+                    continue
+                for _fname in sorted(os.listdir(_full)):
+                    if _fname.lower().endswith('.bmp'):
+                        _img = self.load_image(os.path.join(_full, _fname), scale=img_scale)
+                        if _img:
+                            _target.append(_img)
+            logger.info(f"Day images: {len(self.day_images)}, Night images: {len(self.night_images)}")
+
             # Resize frise to span full display width (and scale height on large displays)
             if self.frise is not None and Image is not None and hasattr(self, 'width') and self.frise.width < self.width:
                 new_h = max(self.frise.height, int(self.frise.height * img_scale)) if img_scale > 1.0 else self.frise.height
