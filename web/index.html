@@ -408,19 +408,26 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-// Viking background image
+// Screen background — live copy of the e-paper display
 const vikingImg = new Image();
-vikingImg.src = '/web/images/mildviking.png';
+function _loadScreenBg() {
+  vikingImg.src = '/web/screen.png?t=' + Date.now();
+}
+_loadScreenBg();
+setInterval(_loadScreenBg, 15000); // refresh every 15 s
 
 function drawVikingBg() {
   if (!vikingImg.complete || !vikingImg.naturalWidth) return;
-  const tH = H * 0.70;
-  const tW = vikingImg.naturalWidth * (tH / vikingImg.naturalHeight);
+  const maxW = W * 0.85;
+  const maxH = H * 0.75;
+  const scale = Math.min(maxW / vikingImg.naturalWidth, maxH / vikingImg.naturalHeight);
+  const tW = vikingImg.naturalWidth  * scale;
+  const tH = vikingImg.naturalHeight * scale;
   const vx = (W - tW) / 2;
-  const vy = (H - tH) * 0.45;
+  const vy = (H - tH) / 2;
   ctx.save();
   ctx.filter = 'invert(1)';
-  ctx.globalAlpha = 0.15;
+  ctx.globalAlpha = 0.18;
   ctx.globalCompositeOperation = 'screen';
   ctx.drawImage(vikingImg, vx, vy, tW, tH);
   ctx.restore();
