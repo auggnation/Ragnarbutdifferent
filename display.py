@@ -3106,7 +3106,7 @@ class Display:
                 # ════════════════════════════════════════════════════════
                 # VIKING IMAGE — 1 text line taller than before
                 # ════════════════════════════════════════════════════════
-                _img_end = int(H * 0.623) + _lh   # previous end + 1 line
+                _img_end = int(H * 0.623) + 2 * _lh   # 2 lines below old baseline
                 _paste_y = _viking_start           # fallback if no image
 
                 if display_image is not None:
