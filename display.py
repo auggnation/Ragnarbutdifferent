@@ -174,6 +174,16 @@ class Display:
         self._img_last_rotate = 0.0
         self._IMG_ROTATE_S  = 120
 
+        # High score keeper — persisted to data/highscores.json
+        self._hs_file = os.path.join(
+            getattr(self.shared_data, 'datadir', '/tmp'), 'highscores.json')
+        self._highscores = self._load_highscores()
+        self._hs_last_update = 0.0
+        self._HS_UPDATE_S   = 60   # update scores every 60 s
+        # Pop-up: show high score overlay every N sub-page ticks
+        self._hs_show_ticks = 0    # countdown until next pop-up
+        self._HS_POP_EVERY  = 20   # show every ~20 sub-page advances (~100 s)
+
     def get_frise_position(self):
         """Get the frise position based on the display type."""
         display_type = self.config.get("epd_type", "default")
