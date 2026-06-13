@@ -184,6 +184,107 @@ class Display:
         self._hs_show_ticks = 0    # countdown until next pop-up
         self._HS_POP_EVERY  = 20   # show every ~20 sub-page advances (~100 s)
 
+    # ── High score system ─────────────────────────────────────────────
+
+    def _load_highscores(self):
+        try:
+            if os.path.exists(self._hs_file):
+                with open(self._hs_file, 'r') as f:
+                    import json as _json
+                    return _json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_highscores(self):
+        try:
+            import json as _json
+            with open(self._hs_file, 'w') as f:
+                _json.dump(self._highscores, f, indent=2)
+        except Exception as e:
+            logger.debug(f"Highscore save failed: {e}")
+
+    def _update_highscores(self, tm_data):
+        changed = False
+        now_iso = datetime.now().isoformat(timespec='seconds')
+
+        def _check(key, value, label, fmt_fn):
+            nonlocal changed
+            prev = self._highscores.get(key, {})
+            if not prev or value > prev.get('value', 0):
+                self._highscores[key] = {'value': value, 'label': label,
+                                         'display': fmt_fn(value), 'set_at': now_iso}
+                changed = True
+
+        # Uptime
+        uptime_s = tm_data.get('uptime_seconds', 0) or 0
+        _check('longest_uptime', uptime_s, 'Longest uptime',
+               lambda v: f"{int(v//3600)}h {int((v%3600)//60)}m")
+
+        # Total bytes received
+        bytes_recv = tm_data.get('bytes_recv', 0) or 0
+        def _fmt_bytes(v):
+            if v >= 1e9: return f"{v/1e9:.1f} GB"
+            if v >= 1e6: return f"{v/1e6:.1f} MB"
+            return f"{v/1e3:.0f} KB"
+        _check('most_data_recv', bytes_recv, 'Most data recv', _fmt_bytes)
+
+        bytes_sent = tm_data.get('bytes_sent', 0) or 0
+        _check('most_data_sent', bytes_sent, 'Most data sent', _fmt_bytes)
+
+        # Peak device count
+        dev_count = tm_data.get('device_count', 0) or 0
+        _check('most_devices', dev_count, 'Most devices seen', str)
+
+        # Peak recv rate (stored per update, compared over time)
+        recv_rate = tm_data.get('recv_rate', 0) or 0
+        _check('peak_recv_rate', recv_rate, 'Peak recv rate',
+               lambda v: f"{v/1e6:.2f} MB/s" if v >= 1e6 else f"{v/1e3:.0f} KB/s")
+
+        if changed:
+            self._save_highscores()
+
+    def _render_highscore_overlay(self, draw, W, H, sx, sy):
+        """Draw a high score pop-up overlay centred on the screen."""
+        hs = self._highscores
+        if not hs:
+            return
+        _f9 = self.shared_data.font_arial9
+        _lh = max(8, max(7, int(9 * sy)) + 1)
+
+        # Box dimensions
+        entries = list(hs.values())[:4]   # show up to 4 records
+        box_w = int(W * 0.88)
+        box_h = _lh * (len(entries) + 2) + 4  # header + entries + padding
+        box_x = (W - box_w) // 2
+        box_y = max(2, (H - box_h) // 2)
+
+        # Fill + border
+        draw.rectangle([box_x, box_y, box_x + box_w, box_y + box_h], fill=255, outline=0)
+        # Title bar
+        draw.rectangle([box_x, box_y, box_x + box_w, box_y + _lh + 2], fill=0)
+        title = "⚡ HALL OF RECORDS ⚡"
+        try:
+            tw = _f9.getlength(title)
+        except Exception:
+            tw = 80
+        draw.text((box_x + (box_w - tw) // 2, box_y + 1), title,
+                  font=_f9, fill=255)
+
+        y = box_y + _lh + 4
+        for entry in entries:
+            label   = entry.get('label', '?')[:14]
+            display = entry.get('display', '?')[:10]
+            draw.text((box_x + 4, y), label, font=_f9, fill=0)
+            try:
+                dw = _f9.getlength(display)
+            except Exception:
+                dw = 40
+            draw.text((box_x + box_w - 4 - int(dw), y), display, font=_f9, fill=0)
+            y += _lh
+
+    # ─────────────────────────────────────────────────────────────────
+
     def get_frise_position(self):
         """Get the frise position based on the display type."""
         display_type = self.config.get("epd_type", "default")
@@ -2928,11 +3029,19 @@ class Display:
                 vlans        = tm_data.get('vlan_subnets', [])
                 subnet       = tm_data.get('subnet', '')
 
+                # ── Update high scores (every 60 s) ─────────────────────────────
+                _now_hs = time.time()
+                if _now_hs - self._hs_last_update >= self._HS_UPDATE_S:
+                    self._hs_last_update = _now_hs
+                    self._update_highscores(tm_data)
+                    self._hs_show_ticks -= 1
+
                 # ── Auto-advance sub-page every 5 s ─────────────────────────────
                 now_t = time.time()
                 if now_t - self._sub_page_last_switch >= self._SUB_PAGE_INTERVAL:
                     self._sub_page = (self._sub_page + 1) % self._SUB_PAGE_COUNT
                     self._sub_page_last_switch = now_t
+                    self._hs_show_ticks -= 1
 
                 # ── Day / Night image selection ─────────────────────────────────
                 _hour       = datetime.now().hour
@@ -3183,6 +3292,11 @@ class Display:
                     dx = W // 2 - 10
                 draw.text((dx, H - _lh - 1), dots,
                           font=self.shared_data.font_arial11, fill=0)
+
+                # ── High score pop-up overlay ────────────────────────────────────
+                if self._hs_show_ticks <= 0 and self._highscores:
+                    self._render_highscore_overlay(draw, W, H, sx, sy)
+                    self._hs_show_ticks = self._HS_POP_EVERY   # reset countdown
 
                 # Border
                 draw.rectangle((1, 1, W - 1, H - 1), outline=0)
