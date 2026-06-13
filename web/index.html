@@ -175,6 +175,35 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
   font-size:11px;letter-spacing:1px;
 }
 
+/* ── Hall of Records button + dropdown ───────────────────────── */
+#hof-btn{margin-left:auto}
+#hof-panel{
+  display:none;position:fixed;top:46px;right:0;width:320px;max-height:70vh;
+  z-index:40;overflow-y:auto;
+  background:rgba(5,5,5,.97);border:1px solid rgba(255,255,255,.15);
+  border-top:none;pointer-events:all;
+}
+#hof-panel.open{display:block}
+#hof-panel-header{
+  padding:10px 14px;border-bottom:1px solid rgba(255,255,255,.1);
+  font-size:10px;letter-spacing:4px;text-transform:uppercase;
+  display:flex;justify-content:space-between;align-items:center;
+}
+#hof-close{cursor:pointer;font-size:16px;opacity:.5}
+#hof-close:hover{opacity:1}
+#hof-list{padding:4px 0}
+.hof-row{
+  display:flex;justify-content:space-between;align-items:baseline;
+  padding:7px 14px;border-bottom:1px solid rgba(255,255,255,.04);
+  font-size:10px;letter-spacing:1px;
+}
+.hof-row:last-child{border-bottom:none}
+.hof-rank{color:rgba(255,255,255,.3);width:22px;flex-shrink:0;font-size:9px}
+.hof-label{flex:1;opacity:.75}
+.hof-value{color:currentColor;font-weight:700;letter-spacing:2px;white-space:nowrap;margin-left:8px}
+.hof-date{font-size:8px;opacity:.3;white-space:nowrap;margin-left:8px}
+#hof-empty{padding:20px 14px;text-align:center;opacity:.35;font-size:10px;letter-spacing:2px}
+
 /* ── Device bubble canvas ─────────────────────────────────────── */
 #bubbles{position:fixed;inset:0;width:100%;height:100%;z-index:2;pointer-events:auto;cursor:crosshair}
 
@@ -222,6 +251,16 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
     <button class="top-btn" id="toggle-vlans">⊟ VLANS</button>
     <button class="top-btn" id="scan-btn">⟳ RESCAN</button>
     <a class="top-btn" href="/settings">⚙ SETTINGS</a>
+    <button class="top-btn" id="hof-btn">🏆 RECORDS</button>
+  </div>
+
+  <!-- Hall of Records dropdown (top-right) -->
+  <div id="hof-panel">
+    <div id="hof-panel-header">
+      <span>⚡ Hall of Records</span>
+      <span id="hof-close">✕</span>
+    </div>
+    <div id="hof-list"><div id="hof-empty">No records yet — keep monitoring!</div></div>
   </div>
 
   <!-- Center: mode label -->
@@ -1292,6 +1331,55 @@ el('speedtest-btn').addEventListener('click', async () => {
   }
   el('speedtest-btn').textContent     = '⚡ SPEEDTEST';
   el('speedtest-btn').style.pointerEvents = 'auto';
+});
+
+// ── Hall of Records ────────────────────────────────────────────────
+const _hofPanel = el('hof-panel');
+
+function _fmtHofDate(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'2-digit'});
+  } catch { return ''; }
+}
+
+async function _loadHof() {
+  try {
+    const r = await fetch('/api/highscores');
+    const d = await r.json();
+    const list = el('hof-list');
+    const records = d.records || [];
+    if (!records.length) {
+      list.innerHTML = '<div id="hof-empty">No records yet — keep monitoring!</div>';
+      return;
+    }
+    list.innerHTML = records.slice(0, 20).map((rec, i) => `
+      <div class="hof-row">
+        <span class="hof-rank">#${i + 1}</span>
+        <span class="hof-label">${rec.label}</span>
+        <span class="hof-value">${rec.display}</span>
+        <span class="hof-date">${_fmtHofDate(rec.set_at)}</span>
+      </div>`).join('');
+  } catch (e) {
+    el('hof-list').innerHTML = '<div id="hof-empty">Unable to load records</div>';
+  }
+}
+
+el('hof-btn').addEventListener('click', () => {
+  const open = _hofPanel.classList.toggle('open');
+  el('hof-btn').classList.toggle('active', open);
+  if (open) _loadHof();
+});
+el('hof-close').addEventListener('click', () => {
+  _hofPanel.classList.remove('open');
+  el('hof-btn').classList.remove('active');
+});
+document.addEventListener('click', e => {
+  if (!_hofPanel.contains(e.target) && e.target !== el('hof-btn')) {
+    _hofPanel.classList.remove('open');
+    el('hof-btn').classList.remove('active');
+  }
 });
 
 // ── Screen viewer widget toggle ────────────────────────────────────
