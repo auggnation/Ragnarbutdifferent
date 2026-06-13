@@ -408,7 +408,7 @@ function drawVikingBg() {
   if (!vikingImg.complete || !vikingImg.naturalWidth) return;
   const tH = H * 0.70;
   const tW = vikingImg.naturalWidth * (tH / vikingImg.naturalHeight);
-  const vx = W - tW - W * 0.05;
+  const vx = (W - tW) / 2;
   const vy = (H - tH) * 0.45;
   ctx.save();
   ctx.filter = 'invert(1)';

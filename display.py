@@ -2921,8 +2921,11 @@ class Display:
                 # ── Night mode: use attack image 21:00–06:00 ────────────────────
                 _hour = datetime.now().hour
                 _night_mode = _hour >= 21 or _hour < 6
-                display_image = (self.shared_data.attack
-                                 if (high_traffic or _night_mode) else self.main_image)
+                if high_traffic or _night_mode:
+                    display_image = self.shared_data.attack
+                else:
+                    # mildviking.bmp is the primary Viking character image
+                    display_image = getattr(self.shared_data, 'ragnar1', None) or self.main_image
                 if not display_image:
                     display_image = getattr(self.shared_data, 'ragnarstatusimage', None)
 
@@ -3014,60 +3017,54 @@ class Display:
                               font=self.shared_data.font_arial9, fill=0)
 
                 # ════════════════════════════════════════════════════════
-                # PERMANENT: IP + network + speed test — below Viking's feet
+                # PERMANENT: single compact line below Viking's feet
                 # ════════════════════════════════════════════════════════
-                _py      = _img_end + int(2 * sy)
+                _f9_h  = max(7, int(9 * sy))           # actual font pixel height
+                _lh    = _f9_h + max(1, int(2 * sy))   # line height with small gap
+                _py    = _img_end + max(1, int(2 * sy))
                 _ip_str  = current_ip if current_ip else '---'
                 _net_str = current_ssid if current_ssid else (conn_type.upper() if conn_type else 'NO NET')
-                draw.text((int(4 * sx), _py), _ip_str[:22],
-                          font=self.shared_data.font_arial9, fill=0)
-                _py += int(9 * sy)
-                draw.text((int(4 * sx), _py), _net_str[:22],
-                          font=self.shared_data.font_arial9, fill=0)
-                _py += int(9 * sy)
-                # Speed test: last result with timestamp
-                spd_at = tm_data.get('speedtest_at', '')
+                spd_at   = tm_data.get('speedtest_at', '')
                 if spd_dl or spd_ul:
-                    _spd_t = (' @' + spd_at[-5:]) if spd_at else ''
-                    _spd_str = f"↓{spd_dl:.0f} ↑{spd_ul:.0f}Mb{_spd_t}"
+                    _spd_tag = f" ↓{spd_dl:.0f}↑{spd_ul:.0f}M"
                 else:
-                    _spd_str = "SPD: ---"
-                draw.text((int(4 * sx), _py), _spd_str[:22],
+                    _spd_tag = ''
+                _compact = f"{_ip_str}  {_net_str[:10]}{_spd_tag}"
+                draw.text((int(4 * sx), _py), _compact[:24],
                           font=self.shared_data.font_arial9, fill=0)
-                _py += int(9 * sy)
+                _py += _lh
 
                 # ════════════════════════════════════════════════════════
                 # DIVIDER — boundary of permanent / scrolling zones
                 # ════════════════════════════════════════════════════════
                 mid_y        = _py
                 draw.line([(int(2 * sx), mid_y), (W - int(2 * sx), mid_y)], fill=0, width=1)
-                bottom_y     = mid_y + int(2 * sy)
-                max_bottom_y = H - int(12 * sy)
+                bottom_y     = mid_y + max(1, int(2 * sy))
+                max_bottom_y = H - _lh   # leave one line-height for page dots
 
                 # ════════════════════════════════════════════════════════
                 # SCROLLING SUB-PAGES — cycle below permanent section
                 # ════════════════════════════════════════════════════════
+                _f9 = self.shared_data.font_arial9
 
                 # ── SUB-PAGE 0: Devices ──────────────────────────────
                 if self._sub_page == 0:
                     y = bottom_y
                     draw.text((int(6 * sx), y),
-                              f"DEVICES  {dev_count}  ↓{recv_human} ↑{sent_human}",
-                              font=self.shared_data.font_arial11, fill=0)
-                    y += int(10 * sy)
+                              f"DEV {dev_count}  ↓{recv_human} ↑{sent_human}",
+                              font=_f9, fill=0)
+                    y += _lh
                     if devices:
-                        for dev in devices[:8]:
-                            _dip  = dev.get('ip', '?')
+                        for dev in devices[:3]:
+                            _dip   = dev.get('ip', '?')
                             _dhost = (dev.get('hostname') or dev.get('mac', '')[:8]).strip()
-                            _dline = f"{_dip}  {_dhost[:12]}" if _dhost else _dip
-                            draw.text((int(6 * sx), y), _dline,
-                                      font=self.shared_data.font_arial11, fill=0)
-                            y += int(10 * sy)
+                            _dline = f"{_dip}  {_dhost[:10]}" if _dhost else _dip
                             if y >= max_bottom_y:
                                 break
+                            draw.text((int(6 * sx), y), _dline, font=_f9, fill=0)
+                            y += _lh
                     else:
-                        draw.text((int(6 * sx), y), "Scanning...",
-                                  font=self.shared_data.font_arial11, fill=0)
+                        draw.text((int(6 * sx), y), "Scanning...", font=_f9, fill=0)
 
                 # ── SUB-PAGE 1: VLANs / subnets ─────────────────────
                 elif self._sub_page == 1:
@@ -3075,69 +3072,61 @@ class Display:
                     all_nets = vlans if vlans else ([subnet] if subnet else [])
                     _gw = tm_data.get('gateway_ip', '')
                     draw.text((int(6 * sx), y), f"VLANS  GW:{_gw}" if _gw else "VLANS",
-                              font=self.shared_data.font_arial11, fill=0)
-                    y += int(10 * sy)
+                              font=_f9, fill=0)
+                    y += _lh
                     if all_nets:
-                        for net in all_nets[:8]:
-                            draw.text((int(6 * sx), y), str(net),
-                                      font=self.shared_data.font_arial11, fill=0)
-                            y += int(10 * sy)
+                        for net in all_nets[:3]:
                             if y >= max_bottom_y:
                                 break
+                            draw.text((int(6 * sx), y), str(net), font=_f9, fill=0)
+                            y += _lh
                     else:
-                        draw.text((int(6 * sx), y), "No subnets found",
-                                  font=self.shared_data.font_arial11, fill=0)
+                        draw.text((int(6 * sx), y), "No subnets", font=_f9, fill=0)
 
                 # ── SUB-PAGE 2: Top traffic ──────────────────────────
                 elif self._sub_page == 2:
                     y = bottom_y
-                    draw.text((int(6 * sx), y), "TOP TRAFFIC",
-                              font=self.shared_data.font_arial11, fill=0)
-                    y += int(10 * sy)
+                    draw.text((int(6 * sx), y), "TOP TRAFFIC", font=_f9, fill=0)
+                    y += _lh
                     _active = sorted(
                         [d for d in devices if d.get('rate_in', 0) + d.get('rate_out', 0) > 0],
                         key=lambda d: d.get('rate_in', 0) + d.get('rate_out', 0),
                         reverse=True
                     )
                     if _active:
-                        for _dev in _active[:7]:
+                        for _dev in _active[:3]:
                             _dip = _dev.get('ip', '?')
                             _ri  = _dev.get('rate_in', 0)
                             _ro  = _dev.get('rate_out', 0)
-                            draw.text((int(6 * sx), y),
-                                      f"{_dip}  ↓{_rfmt(_ri)} ↑{_rfmt(_ro)}",
-                                      font=self.shared_data.font_arial11, fill=0)
-                            y += int(10 * sy)
                             if y >= max_bottom_y:
                                 break
+                            draw.text((int(6 * sx), y),
+                                      f"{_dip}  ↓{_rfmt(_ri)} ↑{_rfmt(_ro)}",
+                                      font=_f9, fill=0)
+                            y += _lh
                     else:
-                        draw.text((int(6 * sx), y), "No active traffic",
-                                  font=self.shared_data.font_arial11, fill=0)
+                        draw.text((int(6 * sx), y), "No active traffic", font=_f9, fill=0)
 
                 # ── SUB-PAGE 3: Speed test results ───────────────────
                 elif self._sub_page == 3:
                     y = bottom_y
                     spd_ping = tm_data.get('speedtest_ping', 0.0)
                     spd_at   = tm_data.get('speedtest_at', '')
-                    draw.text((int(6 * sx), y), "SPEED TEST",
-                              font=self.shared_data.font_arial11, fill=0)
-                    y += int(10 * sy)
+                    draw.text((int(6 * sx), y), "SPEED TEST", font=_f9, fill=0)
+                    y += _lh
                     for _line in [
-                        f"DOWN  {spd_dl:.1f} Mbps" if spd_dl else "DOWN  --",
-                        f"UP    {spd_ul:.1f} Mbps" if spd_ul else "UP    --",
-                        f"PING  {spd_ping:.0f} ms"  if spd_ping else "PING  --",
-                        f"AT    {spd_at}"           if spd_at   else "AT    --",
+                        f"↓{spd_dl:.1f} ↑{spd_ul:.1f} Mbps" if (spd_dl or spd_ul) else "DOWN/UP  --",
+                        f"PING {spd_ping:.0f}ms" if spd_ping else "PING  --",
+                        f"AT {spd_at[-5:]}"      if spd_at   else "AT  --",
                     ]:
-                        draw.text((int(6 * sx), y), _line,
-                                  font=self.shared_data.font_arial11, fill=0)
-                        y += int(10 * sy)
                         if y >= max_bottom_y:
                             break
+                        draw.text((int(6 * sx), y), _line, font=_f9, fill=0)
+                        y += _lh
 
                 # ── SUB-PAGE 4: Time + uptime ────────────────────────
                 else:
                     y = bottom_y
-                    # Local time with optional configured timezone
                     try:
                         from zoneinfo import ZoneInfo as _ZI
                         _tz_name = getattr(self.shared_data, 'config', {}).get('timezone', '')
@@ -3145,20 +3134,14 @@ class Display:
                         _now     = datetime.now(_tz) if _tz else datetime.now()
                     except Exception:
                         _now = datetime.now()
-                    _time_str = _now.strftime('%H:%M  %a %d %b')
-                    draw.text((int(6 * sx), y), _time_str,
-                              font=self.shared_data.font_arial11, fill=0)
-                    y += int(10 * sy)
-                    for _line in [
-                        f"UP    {uptime_h}",
-                        f"LVL   {level}",
-                        f"DEV   {dev_count}",
-                    ]:
+                    draw.text((int(6 * sx), y), _now.strftime('%H:%M  %a %d %b'),
+                              font=_f9, fill=0)
+                    y += _lh
+                    for _line in [f"UP {uptime_h}", f"LVL {level}", f"DEV {dev_count}"]:
                         if y >= max_bottom_y:
                             break
-                        draw.text((int(6 * sx), y), _line,
-                                  font=self.shared_data.font_arial11, fill=0)
-                        y += int(10 * sy)
+                        draw.text((int(6 * sx), y), _line, font=_f9, fill=0)
+                        y += _lh
 
                 # Page dots at bottom
                 dots = _page_dots(self._sub_page, self._SUB_PAGE_COUNT)
