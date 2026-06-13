@@ -3078,7 +3078,8 @@ class Display:
                     return f"{int(b)}B"
 
                 # ════════════════════════════════════════════════════════
-                # HEADER — two lines: name+level / time+date
+                # VIKING IMAGE — starts at top of screen, grows up 2 lines
+                # Header text is drawn OVER the image afterwards
                 # ════════════════════════════════════════════════════════
                 _title   = getattr(self.shared_data, 'config', {}).get('device_name', 'MILD-VIKING')
                 _lvl_str = f"LV{level}"
@@ -3090,24 +3091,15 @@ class Display:
                 except Exception:
                     _now_t = datetime.now()
 
-                _f9_h = max(7, int(9 * sy))   # font pixel height
-                _lh   = max(8, _f9_h + 1)     # tight line height for 2-line header
+                _f9_h = max(7, int(9 * sy))
+                _lh   = max(8, _f9_h + 1)
 
                 _line1 = f"{_title} - {_lvl_str}"
                 _line2 = f"{_now_t.strftime('%H:%M')} - {_now_t.strftime('%b %d %Y')}"
-                draw.text((int(2 * sx), 1), _line1,
-                          font=self.shared_data.font_arial9, fill=0)
-                draw.text((int(2 * sx), 1 + _lh), _line2,
-                          font=self.shared_data.font_arial9, fill=0)
 
-                _header_h     = 1 + 2 * _lh   # bottom of 2-line header block
-                _viking_start = _header_h
-
-                # ════════════════════════════════════════════════════════
-                # VIKING IMAGE — 1 text line taller than before
-                # ════════════════════════════════════════════════════════
-                _img_end = int(H * 0.623) + 2 * _lh   # 2 lines below old baseline
-                _paste_y = _viking_start           # fallback if no image
+                _viking_start = 1                       # top of screen
+                _img_end      = int(H * 0.623) + _lh   # original +1 line bottom
+                _paste_y      = _viking_start
 
                 if display_image is not None:
                     _max_h = max(1, _img_end - _viking_start)
@@ -3127,6 +3119,14 @@ class Display:
                 else:
                     draw.text((int(W * 0.25), _viking_start + 2), _title,
                               font=self.shared_data.font_arialbold, fill=0)
+
+                # ════════════════════════════════════════════════════════
+                # HEADER TEXT — drawn over the Viking image
+                # ════════════════════════════════════════════════════════
+                draw.text((int(2 * sx), 1), _line1,
+                          font=self.shared_data.font_arial9, fill=0)
+                draw.text((int(2 * sx), 1 + _lh), _line2,
+                          font=self.shared_data.font_arial9, fill=0)
 
                 # ════════════════════════════════════════════════════════
                 # CHAT BUBBLE — at helmet level, last IP octet + last 4 MAC + rates
