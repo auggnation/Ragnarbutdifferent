@@ -3160,13 +3160,13 @@ class Display:
                 # ════════════════════════════════════════════════════════
                 _ip_str  = current_ip if current_ip else '---'
                 _net_str = current_ssid if current_ssid else (conn_type.upper() if conn_type else 'NO NET')
-                _py = _img_actual_bottom + 2   # starts right below image, not slot boundary
+                _py = _img_actual_bottom + _lh   # full line gap after Viking
                 draw.text((int(4 * sx), _py), _ip_str[:24],
                           font=self.shared_data.font_arial9, fill=0)
                 _py += _lh
                 draw.text((int(4 * sx), _py), _net_str[:24],
                           font=self.shared_data.font_arial9, fill=0)
-                _py += _lh
+                _py += _lh * 2   # full line gap after network before divider
 
                 # ════════════════════════════════════════════════════════
                 # DIVIDER — boundary of permanent / scrolling zones
