@@ -3097,15 +3097,15 @@ class Display:
                 _line1 = f"{_title} - {_lvl_str}"
                 _line2 = f"{_now_t.strftime('%H:%M')} - {_now_t.strftime('%b %d %Y')}"
 
-                _viking_start = 1 + _lh                 # 1 line down from top
-                _img_end      = int(H * 0.623) + 4 * _lh  # stretched 3 lines further down
-                _paste_y      = _viking_start
+                _viking_start  = 1 + _lh                    # 1 line down from top
+                _viking_max_h  = H - _viking_start - 4 * _lh  # leave 4 lines for info below
+                _paste_y       = _viking_start
+                _img_actual_bottom = _viking_start          # tracks real bottom of image
 
                 if display_image is not None:
-                    _max_h = max(1, _img_end - _viking_start)
                     _max_w = int(W * 0.90)
                     _scale = min(_max_w / max(display_image.width, 1),
-                                 _max_h / max(display_image.height, 1))
+                                 _viking_max_h / max(display_image.height, 1))
                     if _scale > 0:
                         _iw = max(1, int(display_image.width  * _scale))
                         _ih = max(1, int(display_image.height * _scale))
@@ -3113,9 +3113,9 @@ class Display:
                             _di = display_image.resize((_iw, _ih), Image.Resampling.LANCZOS)
                         except Exception:
                             _di = display_image.resize((_iw, _ih), Image.NEAREST)
-                        _cx      = (W - _di.width) // 2
-                        _paste_y = _viking_start   # top-align: no empty gap above
+                        _cx = (W - _di.width) // 2
                         image.paste(_di, (_cx, _paste_y))
+                        _img_actual_bottom = _paste_y + _ih   # real bottom of drawn image
                 else:
                     draw.text((int(W * 0.25), _viking_start + 2), _title,
                               font=self.shared_data.font_arialbold, fill=0)
@@ -3143,7 +3143,7 @@ class Display:
                     _bri  = _bd.get('rate_in', 0)
                     _bro  = _bd.get('rate_out', 0)
                     _bx   = int(W * 0.46)
-                    _by   = _paste_y + 1
+                    _by   = _img_actual_bottom - int(18 * sy) - 2   # anchored to image bottom
                     _bw   = int(W * 0.51)
                     _bh   = int(18 * sy)
                     draw.rectangle([_bx, _by, _bx + _bw, _by + _bh], fill=255, outline=0)
@@ -3160,7 +3160,7 @@ class Display:
                 # ════════════════════════════════════════════════════════
                 _ip_str  = current_ip if current_ip else '---'
                 _net_str = current_ssid if current_ssid else (conn_type.upper() if conn_type else 'NO NET')
-                _py = _img_end + 2
+                _py = _img_actual_bottom + 2   # starts right below image, not slot boundary
                 draw.text((int(4 * sx), _py), _ip_str[:24],
                           font=self.shared_data.font_arial9, fill=0)
                 _py += _lh
