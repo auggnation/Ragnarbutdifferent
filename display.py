@@ -3097,7 +3097,7 @@ class Display:
                 _line1 = f"{_title} - {_lvl_str}"
                 _line2 = f"{_now_t.strftime('%H:%M')} - {_now_t.strftime('%b %d %Y')}"
 
-                _viking_start  = 1 + _lh                    # 1 line down from top
+                _viking_start  = 1 + 2 * _lh                 # 2 lines down from top
                 _viking_max_h  = H - _viking_start - 4 * _lh  # leave 4 lines for info below
                 _paste_y       = _viking_start
                 _img_actual_bottom = _viking_start          # tracks real bottom of image
