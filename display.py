@@ -3097,8 +3097,8 @@ class Display:
                 _line1 = f"{_title} - {_lvl_str}"
                 _line2 = f"{_now_t.strftime('%H:%M')} - {_now_t.strftime('%b %d %Y')}"
 
-                _viking_start = 1                       # top of screen
-                _img_end      = int(H * 0.623) + _lh   # original +1 line bottom
+                _viking_start = 1 + _lh                 # 1 line down from top
+                _img_end      = int(H * 0.623) + 4 * _lh  # stretched 3 lines further down
                 _paste_y      = _viking_start
 
                 if display_image is not None:
