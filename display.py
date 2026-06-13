@@ -3114,7 +3114,7 @@ class Display:
                         except Exception:
                             _di = display_image.resize((_iw, _ih), Image.NEAREST)
                         _cx      = (W - _di.width) // 2
-                        _paste_y = max(_viking_start, _img_end - _ih)
+                        _paste_y = _viking_start   # top-align: no empty gap above
                         image.paste(_di, (_cx, _paste_y))
                 else:
                     draw.text((int(W * 0.25), _viking_start + 2), _title,
