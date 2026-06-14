@@ -168,11 +168,11 @@ class Display:
         self._SUB_PAGE_INTERVAL = 5.0
         self._SUB_PAGE_COUNT = 5
 
-        # Day/night image rotation — advance every 2 minutes
+        # Day/night image rotation — advance every 15 seconds
         self._day_img_idx   = 0
         self._night_img_idx = 0
         self._img_last_rotate = 0.0
-        self._IMG_ROTATE_S  = 120
+        self._IMG_ROTATE_S  = 15
 
         # High score keeper — persisted to data/highscores.json
         self._hs_file = os.path.join(
@@ -3026,6 +3026,8 @@ class Display:
                 spd_dl       = tm_data.get('speedtest_dl', 0.0)
                 spd_ul       = tm_data.get('speedtest_ul', 0.0)
                 devices      = tm_data.get('devices', [])
+                _mac_fmt     = self.config.get('mac_format', 'full')
+                _ip_fmt      = self.config.get('ip_format', 'full')
                 vlans        = tm_data.get('vlan_subnets', [])
                 subnet       = tm_data.get('subnet', '')
 
@@ -3196,16 +3198,26 @@ class Display:
                 if sp < _dev_page_count:
                     y = bottom_y
                     _offset = sp * _dev_per_page
-                    draw.text((int(6 * sx), y),
-                              f"DEV {dev_count}  ↓{recv_human} ↑{sent_human}",
-                              font=_f9, fill=0)
+                    _pg_lbl = f"DEVICES  {sp * _dev_per_page + 1}-{min((_offset + _dev_per_page), dev_count)}/{dev_count}"
+                    draw.text((int(6 * sx), y), _pg_lbl, font=_f9, fill=0)
                     y += _lh
                     _page_devs = devices[_offset:_offset + _dev_per_page]
                     if _page_devs:
                         for dev in _page_devs:
-                            _dip   = dev.get('ip', '?')
-                            _dhost = (dev.get('hostname') or dev.get('mac', '')[:8]).strip()
-                            _dline = f"{_dip}  {_dhost[:10]}" if _dhost else _dip
+                            _raw_ip  = dev.get('ip', '?')
+                            _raw_mac = dev.get('mac', '')
+                            _dhost   = (dev.get('hostname') or '').strip()
+                            # Apply format prefs
+                            if _ip_fmt == 'last':
+                                _dip = '.' + _raw_ip.split('.')[-1] if '.' in _raw_ip else _raw_ip
+                            else:
+                                _dip = _raw_ip
+                            if not _dhost:
+                                if _mac_fmt == 'last4':
+                                    _dhost = _raw_mac.replace(':', '')[-4:].upper() if _raw_mac else '?'
+                                else:
+                                    _dhost = _raw_mac[:8] if _raw_mac else '?'
+                            _dline = f"{_dhost[:12]}  {_dip}"
                             if y >= max_bottom_y:
                                 break
                             draw.text((int(6 * sx), y), _dline, font=_f9, fill=0)
@@ -3261,10 +3273,12 @@ class Display:
                     spd_at   = tm_data.get('speedtest_at', '')
                     draw.text((int(6 * sx), y), "SPEED TEST", font=_f9, fill=0)
                     y += _lh
+                    _spd_at_fmt = spd_at[-16:] if spd_at else '--'
                     for _line in [
-                        f"↓{spd_dl:.1f} ↑{spd_ul:.1f} Mbps" if (spd_dl or spd_ul) else "DOWN/UP  --",
+                        f"↓ {spd_dl:.1f} Mbps" if spd_dl else "↓  --",
+                        f"↑ {spd_ul:.1f} Mbps" if spd_ul else "↑  --",
                         f"PING {spd_ping:.0f}ms" if spd_ping else "PING  --",
-                        f"AT {spd_at[-5:]}"      if spd_at   else "AT  --",
+                        f"LAST {_spd_at_fmt}",
                     ]:
                         if y >= max_bottom_y:
                             break
