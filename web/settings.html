@@ -64,7 +64,7 @@ html,body{background:#050510;color:#fff;font-family:'Courier New',monospace;min-
 .btn.primary:hover{background:rgba(51,170,255,.08)}
 
 .btn-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center}
-.msg{font-size:10px;letter-spacing:1px;min-height:16px;padding:2px 0}
+.msg{font-size:10px;letter-spacing:1px;min-height:16px;padding:2px 0;word-break:break-word;line-height:1.5}
 .msg.ok{color:#3f8}.msg.err{color:#f55}.msg.info{color:#fa0}
 
 .net-list{border:1px solid rgba(255,255,255,.08);margin-bottom:10px;min-height:32px}
@@ -775,7 +775,11 @@ async function saveFirewall() {
 
 async function testFirewall(btn) {
   btn.disabled = true;
-  msg('fw-msg', '⟳ Testing…', 'info');
+  const fwMsg = document.getElementById('fw-msg');
+  fwMsg.textContent = '⟳ Testing connection…';
+  fwMsg.className = 'msg info';
+  fwMsg.style.whiteSpace = 'normal';
+  fwMsg.style.maxWidth = '100%';
   const payload = {
     firewall_type:       document.getElementById('fw-type').value,
     firewall_url:        document.getElementById('fw-url').value.trim(),
@@ -788,9 +792,12 @@ async function testFirewall(btn) {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload),
     });
-    msg('fw-msg', d.ok ? '✓ ' + (d.message || 'Connected') : '✗ ' + (d.error || 'Failed'),
-        d.ok ? 'ok' : 'err');
-  } catch(e) { msg('fw-msg', '✗ Connection error', 'err'); }
+    fwMsg.textContent = d.ok ? '✓ ' + (d.message || 'Connected') : '✗ ' + (d.error || 'Failed');
+    fwMsg.className   = 'msg ' + (d.ok ? 'ok' : 'err');
+  } catch(e) {
+    fwMsg.textContent = '✗ Request failed — is the Mild-Viking service running?';
+    fwMsg.className   = 'msg err';
+  }
   finally { btn.disabled = false; }
 }
 

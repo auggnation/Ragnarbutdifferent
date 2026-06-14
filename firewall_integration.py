@@ -254,25 +254,14 @@ def test_firewall_connection(fw_type: str, base_url: str, key: str, secret: str,
                              verify_ssl: bool):
     """Returns (ok: bool, message: str). Called by /api/firewall/test endpoint."""
     if not base_url:
-        return False, "Firewall URL is required"
+        return False, "Firewall URL is required (enter the IP address of your router)"
+    if not key:
+        return False, "API key is required"
     try:
         if fw_type == 'opnsense':
             return _opnsense_test(base_url, key, secret, verify_ssl)
         if fw_type == 'pfsense':
             return _pfsense_test(base_url, key, secret, verify_ssl)
         return False, f"Unknown firewall type: {fw_type!r}"
-    except requests.exceptions.SSLError:
-        return False, "SSL certificate error — try disabling 'Verify SSL' in settings"
-    except requests.exceptions.ConnectionError:
-        return False, f"Cannot reach {_make_base_url(base_url)} — check IP/URL"
-    except requests.exceptions.Timeout:
-        return False, "Connection timed out — check IP/URL and firewall rules"
-    except requests.exceptions.HTTPError as e:
-        code = e.response.status_code if e.response is not None else '?'
-        if code == 401:
-            return False, "Authentication failed — check API key / secret"
-        if code == 403:
-            return False, "Access denied — check user privileges on the firewall"
-        return False, f"HTTP {code} error from firewall"
     except Exception as e:
-        return False, str(e)
+        return False, f"Unexpected error: {e}"
