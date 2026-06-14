@@ -267,6 +267,101 @@ def _pfsense_test(base_url: str, key: str, secret: str, verify_ssl: bool):
 
 # ── Public API ────────────────────────────────────────────────────────
 
+def _opnsense_devices(base_url: str, key: str, secret: str, verify_ssl: bool) -> list:
+    """Return [{ip, mac, hostname}] from OPNsense DHCP leases and ARP table."""
+    base = _make_base_url(base_url)
+    s    = _session(verify_ssl)
+    auth = (key, secret)
+    devs: dict[str, dict] = {}  # ip → dev
+
+    def _add(ip, mac_raw, hostname='', descr=''):
+        ip = (ip or '').strip()
+        if not ip:
+            return
+        mac  = _norm_mac(mac_raw) if mac_raw else ''
+        name = _best_name(hostname, descr)
+        if ip not in devs:
+            devs[ip] = {'ip': ip, 'mac': mac, 'hostname': name}
+        else:
+            if mac and not devs[ip]['mac']:
+                devs[ip]['mac'] = mac
+            if name and not devs[ip]['hostname']:
+                devs[ip]['hostname'] = name
+
+    # DHCP leases (ip = 'address', mac = 'hwaddr')
+    try:
+        data = _opnsense_get(s, base, 'dhcpv4/leases/search_lease', auth)
+        for row in data.get('rows', []):
+            _add(row.get('address', ''),
+                 row.get('hwaddr') or row.get('mac') or '',
+                 row.get('hostname', ''), row.get('descr', ''))
+    except Exception as e:
+        logger.debug(f"OPNsense devices (leases): {e}")
+
+    # ARP table — catches static-IP devices not in DHCP
+    try:
+        data = _opnsense_get(s, base, 'diagnostics/interface/get_arp', auth)
+        for row in data.get('rows', []):
+            _add(row.get('ip', ''), row.get('mac', ''), row.get('hostname', ''))
+    except Exception as e:
+        logger.debug(f"OPNsense devices (ARP): {e}")
+
+    return list(devs.values())
+
+
+def _pfsense_devices(base_url: str, key: str, secret: str, verify_ssl: bool) -> list:
+    """Return [{ip, mac, hostname}] from pfSense DHCP leases and ARP table."""
+    base = _make_base_url(base_url)
+    s    = _session(verify_ssl)
+    devs: dict[str, dict] = {}
+
+    def _add(ip, mac_raw, hostname='', descr=''):
+        ip = (ip or '').strip()
+        if not ip:
+            return
+        mac  = _norm_mac(mac_raw) if mac_raw else ''
+        name = _best_name(hostname, descr)
+        if ip not in devs:
+            devs[ip] = {'ip': ip, 'mac': mac, 'hostname': name}
+        else:
+            if mac and not devs[ip]['mac']:
+                devs[ip]['mac'] = mac
+            if name and not devs[ip]['hostname']:
+                devs[ip]['hostname'] = name
+
+    try:
+        data = _pfsense_get(s, base, 'api/v1/services/dhcpd/lease', key, secret)
+        for row in (data.get('data') or []):
+            _add(row.get('ip', ''), row.get('mac', ''), row.get('hostname', ''), row.get('descr', ''))
+    except Exception as e:
+        logger.debug(f"pfSense devices (leases): {e}")
+
+    try:
+        data = _pfsense_get(s, base, 'api/v1/diagnostics/arp', key, secret)
+        for row in (data.get('data') or []):
+            _add(row.get('ip', ''), row.get('mac', ''), row.get('hostname', ''))
+    except Exception as e:
+        logger.debug(f"pfSense devices (ARP): {e}")
+
+    return list(devs.values())
+
+
+def fetch_devices(fw_type: str, base_url: str, key: str, secret: str,
+                  verify_ssl: bool) -> list:
+    """Return [{ip, mac, hostname}] — all devices the firewall knows about.
+    Used to discover cross-VLAN devices the Pi's arp-scan cannot reach."""
+    if not fw_type or not base_url:
+        return []
+    try:
+        if fw_type == 'opnsense':
+            return _opnsense_devices(base_url, key, secret, verify_ssl)
+        if fw_type == 'pfsense':
+            return _pfsense_devices(base_url, key, secret, verify_ssl)
+    except Exception as e:
+        logger.warning(f"Firewall device fetch failed ({fw_type}): {e}")
+    return []
+
+
 def fetch_hostnames(fw_type: str, base_url: str, key: str, secret: str,
                     verify_ssl: bool) -> dict:
     """Return {mac: hostname}. Called by traffic_monitor on each scan."""

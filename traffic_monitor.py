@@ -495,51 +495,70 @@ class TrafficMonitor:
             iface = self.interface_name
             subnet = self.subnet
 
-        subnets = self._discover_subnets() if not subnet else [subnet]
+        auto_subnets  = self._discover_subnets() if not subnet else [subnet]
+        extra_subnets: list = []
         cfg = getattr(self.shared_data, 'config', {}) if self.shared_data else {}
-        subnet_labels: dict = {}  # subnet → display label
+        subnet_labels: dict = {}
 
-        def _add_subnet(entry):
-            """Accept a plain CIDR string or {vlan, subnet} object."""
+        def _parse_entry(entry):
             if isinstance(entry, str):
-                sn, label = entry, entry
-            else:
-                sn    = (entry.get('subnet') or '').strip()
-                vnum  = entry.get('vlan')
-                label = (f"VLAN {vnum}  " if vnum else '') + sn
-            if sn and sn not in subnets:
-                subnets.append(sn)
+                return entry.strip(), entry.strip()
+            sn   = (entry.get('subnet') or '').strip()
+            vnum = entry.get('vlan')
+            label = (f"VLAN {vnum}  " if vnum else '') + sn
+            return sn, label
+
+        for entry in cfg.get('manual_subnets', []):
+            sn, label = _parse_entry(entry)
+            if sn and sn not in auto_subnets and sn not in extra_subnets:
+                extra_subnets.append(sn)
                 subnet_labels[sn] = label
 
-        # manual_subnets — new key (plain strings or {vlan, subnet} objects)
-        for entry in cfg.get('manual_subnets', []):
-            _add_subnet(entry)
+        for entry in cfg.get('manual_vlans', []):  # legacy compat
+            sn, label = _parse_entry(entry)
+            if sn and sn not in auto_subnets and sn not in extra_subnets:
+                extra_subnets.append(sn)
+                subnet_labels[sn] = label
 
-        # manual_vlans — legacy key (backward compat)
-        for entry in cfg.get('manual_vlans', []):
-            _add_subnet(entry)
-        all_devices = []
+        all_devices: list = []
 
-        for sn in subnets:
-            devices = self._scan_subnet(sn, iface)
-            all_devices.extend(devices)
+        # Local subnets: fast arp-scan --localnet
+        for sn in auto_subnets:
+            all_devices.extend(self._scan_subnet(sn, iface))
 
-        # Enrich hostnames from firewall API (OPNsense / pfSense) if configured
+        # Extra/remote subnets: targeted scan that works across routers
+        for sn in extra_subnets:
+            all_devices.extend(self._scan_remote_subnet(sn))
+
+        # Firewall hostname map + full device list from OPNsense/pfSense
         _fw_map: dict = {}
-        cfg = getattr(self.shared_data, 'config', {}) if self.shared_data else {}
+        _fw_devices: list = []
         _fw_type = cfg.get('firewall_type', '')
         _fw_url  = cfg.get('firewall_url', '')
         if _fw_type and _fw_url:
             try:
-                from firewall_integration import fetch_hostnames as _fw_fetch
+                from firewall_integration import fetch_hostnames as _fw_fetch, fetch_devices as _fw_devs
                 _fw_map = _fw_fetch(
                     _fw_type, _fw_url,
                     cfg.get('firewall_api_key', ''),
                     cfg.get('firewall_api_secret', ''),
                     bool(cfg.get('firewall_verify_ssl', False)),
                 )
+                _fw_devices = _fw_devs(
+                    _fw_type, _fw_url,
+                    cfg.get('firewall_api_key', ''),
+                    cfg.get('firewall_api_secret', ''),
+                    bool(cfg.get('firewall_verify_ssl', False)),
+                )
             except Exception as _e:
-                logger.debug(f"Firewall hostname enrichment skipped: {_e}")
+                logger.debug(f"Firewall enrichment skipped: {_e}")
+
+        # Merge firewall-sourced devices (adds cross-VLAN devices the Pi can't arp-scan)
+        known_ips = {d['ip'] for d in all_devices}
+        for fw_dev in _fw_devices:
+            if fw_dev.get('ip') and fw_dev['ip'] not in known_ips:
+                all_devices.append(fw_dev)
+                known_ips.add(fw_dev['ip'])
 
         # Enrich hostnames — firewall map first, then local DNS/mDNS/NetBIOS
         for dev in all_devices:
@@ -551,11 +570,11 @@ class TrafficMonitor:
 
         # Update persistent device registry
         now_str = time.strftime('%Y-%m-%dT%H:%M:%S')
+        all_subnets = auto_subnets + extra_subnets
         with self._lock:
             for dev in all_devices:
                 ip = dev['ip']
                 known = self._known_devices.get(ip, {})
-                # Prefer non-empty values for each field
                 mac = dev.get('mac') or known.get('mac', '')
                 hostname = dev.get('hostname') or known.get('hostname', '')
                 self._known_devices[ip] = {
@@ -570,11 +589,11 @@ class TrafficMonitor:
 
             self.devices = all_devices[:500]
             self.device_count = len(all_devices)
-            self.vlan_subnets = subnets
-            self.vlan_labels  = [subnet_labels.get(s, s) for s in subnets]
+            self.vlan_subnets = all_subnets
+            self.vlan_labels  = [subnet_labels.get(s, s) for s in all_subnets]
             self._last_scan_time = time.time()
 
-        logger.info(f"Scan found {len(all_devices)} devices on {subnets}")
+        logger.info(f"Scan found {len(all_devices)} devices on {all_subnets}")
 
     def _discover_subnets(self):
         """Enumerate all active IPv4 subnets via interfaces, routes, and ARP."""
@@ -696,6 +715,66 @@ class TrafficMonitor:
             pass
         except Exception as e:
             logger.debug(f"nmap scan failed: {e}")
+
+        return []
+
+    def _scan_remote_subnet(self, subnet):
+        """Scan a subnet we're not directly on — works across routed VLANs."""
+        # 1. Try arp-scan with explicit target (works if Pi has layer-2 access)
+        try:
+            cmd = ['arp-scan', subnet, '--quiet']
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                devices = []
+                for line in r.stdout.splitlines():
+                    m = re.match(r'(\d+\.\d+\.\d+\.\d+)\s+([0-9a-fA-F:]{17})\s*(.*)', line)
+                    if m:
+                        devices.append({
+                            'ip': m.group(1),
+                            'mac': m.group(2).upper(),
+                            'hostname': m.group(3).strip()
+                        })
+                if devices:
+                    logger.info(f"arp-scan found {len(devices)} on {subnet}")
+                    return devices
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.debug(f"arp-scan {subnet}: {e}")
+
+        # 2. nmap ping scan — works over routed networks (ICMP must be allowed)
+        try:
+            r = subprocess.run(
+                ['nmap', '-sn', '-T4', '--host-timeout', '3s', subnet],
+                capture_output=True, text=True, timeout=120
+            )
+            devices = []
+            current_host = None
+            for line in r.stdout.splitlines():
+                m = re.search(r'Nmap scan report for (.+)', line)
+                if m:
+                    if current_host:
+                        devices.append(current_host)
+                    host_str = m.group(1).strip()
+                    ip_m = re.search(r'\((\d+\.\d+\.\d+\.\d+)\)', host_str)
+                    if ip_m:
+                        hostname = re.sub(r'\s*\(.*\)', '', host_str).strip()
+                        current_host = {'ip': ip_m.group(1), 'hostname': hostname, 'mac': ''}
+                    else:
+                        current_host = {'ip': host_str, 'hostname': '', 'mac': ''}
+                elif current_host:
+                    mac_m = re.search(r'MAC Address: ([0-9A-F:]+)', line)
+                    if mac_m:
+                        current_host['mac'] = mac_m.group(1)
+            if current_host:
+                devices.append(current_host)
+            if devices:
+                logger.info(f"nmap found {len(devices)} on {subnet}")
+            return devices
+        except FileNotFoundError:
+            logger.debug("nmap not found; install: sudo apt install nmap")
+        except Exception as e:
+            logger.debug(f"nmap {subnet}: {e}")
 
         return []
 
