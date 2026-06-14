@@ -268,6 +268,35 @@ for dir in data data/logs web; do
 done
 chown -R "${MV_USER}:${MV_USER}" "$MV_PATH"
 
+# ── update-viking command ─────────────────────────────────────────────
+# Creates a real executable so it works from any shell (not just bash)
+cat > /usr/local/bin/update-viking << EOF
+#!/bin/bash
+echo "Pulling latest Mild-Viking from GitHub..."
+sudo git -C "${MV_PATH}" pull
+echo "Restarting service..."
+sudo systemctl restart "${SERVICE_NAME}"
+echo "Done. Check status: sudo journalctl -u ${SERVICE_NAME} -n 30"
+EOF
+chmod +x /usr/local/bin/update-viking
+ok "update-viking command installed at /usr/local/bin/update-viking"
+
+# Also add the alias to the invoking user's .bashrc (convenience — same result as the command)
+REAL_USER="${SUDO_USER:-${USER:-pi}}"
+REAL_HOME=$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6 || echo "/home/$REAL_USER")
+if [ -d "$REAL_HOME" ]; then
+    BASHRC="${REAL_HOME}/.bashrc"
+    ALIAS_LINE="alias update-viking='sudo git -C ${MV_PATH} pull && sudo systemctl restart ${SERVICE_NAME}'"
+    if ! grep -q "update-viking" "$BASHRC" 2>/dev/null; then
+        echo "" >> "$BASHRC"
+        echo "# Mild-Viking — pull latest code and restart" >> "$BASHRC"
+        echo "${ALIAS_LINE}" >> "$BASHRC"
+        ok "update-viking alias added to ${BASHRC}"
+    else
+        info "update-viking alias already in ${BASHRC}"
+    fi
+fi
+
 # ── Open web port ─────────────────────────────────────────────────────
 command -v ufw &>/dev/null && ufw allow "${WEB_PORT}/tcp" >> "$LOG_FILE" 2>&1 && \
     info "UFW: opened port $WEB_PORT"
@@ -325,6 +354,7 @@ echo -e "${WHITE}Settings:${NC}       http://${IP_ADDR}:${WEB_PORT}/settings"
 echo -e "${WHITE}Status:${NC}         sudo systemctl status mild-viking"
 echo -e "${WHITE}Logs:${NC}           sudo journalctl -u mild-viking -f"
 echo -e "${WHITE}Restart:${NC}        sudo systemctl restart mild-viking"
+echo -e "${WHITE}Update:${NC}         update-viking"
 echo -e "${WHITE}Install log:${NC}    ${LOG_FILE}"
 echo
 echo -e "${CYAN}If no WiFi is configured the Pi will broadcast a setup hotspot.${NC}"
