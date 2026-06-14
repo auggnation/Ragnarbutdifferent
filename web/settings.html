@@ -291,6 +291,67 @@ html,body{background:#050510;color:#fff;font-family:'Courier New',monospace;min-
     </div>
   </div>
 
+  <!-- DISPLAY PREFERENCES -->
+  <div class="section">
+    <div class="section-header">Display Preferences</div>
+    <div class="section-body">
+      <div class="field">
+        <label>MAC Address Format</label>
+        <label class="check-row"><input type="radio" name="mac-fmt" id="mac-full" value="full"> <span>Full — aa:bb:cc:dd:ee:ff</span></label>
+        <label class="check-row"><input type="radio" name="mac-fmt" id="mac-last4" value="last4"> <span>Last 4 hex — eeff</span></label>
+      </div>
+      <div class="field">
+        <label>IP Address Format</label>
+        <label class="check-row"><input type="radio" name="ip-fmt" id="ip-full" value="full"> <span>Full — 192.168.1.42</span></label>
+        <label class="check-row"><input type="radio" name="ip-fmt" id="ip-last" value="last"> <span>Last octet — .42</span></label>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="saveDisplay()">Save</button>
+        <span class="msg" id="display-msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- FIREWALL INTEGRATION -->
+  <div class="section">
+    <div class="section-header">Firewall Integration</div>
+    <div class="section-body">
+      <div class="field">
+        <label>Firewall Type</label>
+        <select id="fw-type" onchange="toggleFwFields()">
+          <option value="">None (disabled)</option>
+          <option value="opnsense">OPNsense</option>
+          <option value="pfsense">pfSense</option>
+        </select>
+        <div class="field-note">Pull enriched hostnames from your router's DHCP leases</div>
+      </div>
+      <div id="fw-fields" style="display:none">
+        <div class="field">
+          <label>Firewall URL</label>
+          <input type="url" id="fw-url" placeholder="https://192.168.1.1">
+        </div>
+        <div class="field">
+          <label>API Key</label>
+          <input type="text" id="fw-key" placeholder="key">
+        </div>
+        <div class="field">
+          <label>API Secret</label>
+          <input type="password" id="fw-secret" placeholder="secret">
+          <div class="field-note">OPNsense: key + secret pair · pfSense: use key only (Bearer token)</div>
+        </div>
+        <label class="check-row">
+          <input type="checkbox" id="fw-ssl">
+          <span>Verify SSL certificate</span>
+        </label>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="saveFirewall()">Save</button>
+        <button class="btn" id="fw-test-btn" onclick="testFirewall(this)" style="display:none">Test Connection</button>
+        <span class="msg" id="fw-msg"></span>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -350,6 +411,20 @@ async function loadAll() {
     document.getElementById('smtp-user').value     = c.smtp_user     || '';
     document.getElementById('notify-disc').checked = c.notify_on_disconnect !== false;
     document.getElementById('notify-rec').checked  = c.notify_on_reconnect  !== false;
+
+    // Display prefs
+    const macFmt = c.mac_format || 'full';
+    const ipFmt  = c.ip_format  || 'full';
+    document.querySelector(`input[name="mac-fmt"][value="${macFmt}"]`).checked = true;
+    document.querySelector(`input[name="ip-fmt"][value="${ipFmt}"]`).checked   = true;
+
+    // Firewall
+    document.getElementById('fw-type').value   = c.firewall_type   || '';
+    document.getElementById('fw-url').value    = c.firewall_url    || '';
+    document.getElementById('fw-key').value    = c.firewall_api_key    || '';
+    document.getElementById('fw-secret').value = c.firewall_api_secret || '';
+    document.getElementById('fw-ssl').checked  = !!c.firewall_verify_ssl;
+    toggleFwFields();
 
     loadNets();
     loadVlans();
@@ -636,6 +711,65 @@ async function testEmail(btn) {
         d.status === 'ok' ? 'ok' : 'err');
   } catch(e) { msg('notify-msg', '✗ Error', 'err'); }
   finally    { btn.disabled = false; }
+}
+
+// ── DISPLAY PREFERENCES ──────────────────────────────────────────
+async function saveDisplay() {
+  const macFmt = document.querySelector('input[name="mac-fmt"]:checked')?.value || 'full';
+  const ipFmt  = document.querySelector('input[name="ip-fmt"]:checked')?.value  || 'full';
+  try {
+    const d = await api('/api/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mac_format: macFmt, ip_format: ipFmt}),
+    });
+    msg('display-msg', d.status === 'saved' ? '✓ Saved' : '✗ Error', d.status === 'saved' ? 'ok' : 'err');
+  } catch(e) { msg('display-msg', '✗ Error', 'err'); }
+}
+
+// ── FIREWALL INTEGRATION ──────────────────────────────────────────
+function toggleFwFields() {
+  const t = document.getElementById('fw-type').value;
+  const show = !!t;
+  document.getElementById('fw-fields').style.display  = show ? '' : 'none';
+  document.getElementById('fw-test-btn').style.display = show ? '' : 'none';
+}
+
+async function saveFirewall() {
+  const payload = {
+    firewall_type:       document.getElementById('fw-type').value,
+    firewall_url:        document.getElementById('fw-url').value.trim(),
+    firewall_api_key:    document.getElementById('fw-key').value.trim(),
+    firewall_api_secret: document.getElementById('fw-secret').value,
+    firewall_verify_ssl: document.getElementById('fw-ssl').checked,
+  };
+  try {
+    const d = await api('/api/config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    msg('fw-msg', d.status === 'saved' ? '✓ Saved' : '✗ Error', d.status === 'saved' ? 'ok' : 'err');
+  } catch(e) { msg('fw-msg', '✗ Error', 'err'); }
+}
+
+async function testFirewall(btn) {
+  btn.disabled = true;
+  msg('fw-msg', '⟳ Testing…', 'info');
+  const payload = {
+    firewall_type:       document.getElementById('fw-type').value,
+    firewall_url:        document.getElementById('fw-url').value.trim(),
+    firewall_api_key:    document.getElementById('fw-key').value.trim(),
+    firewall_api_secret: document.getElementById('fw-secret').value,
+    firewall_verify_ssl: document.getElementById('fw-ssl').checked,
+  };
+  try {
+    const d = await api('/api/firewall/test', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    msg('fw-msg', d.ok ? '✓ ' + (d.message || 'Connected') : '✗ ' + (d.error || 'Failed'),
+        d.ok ? 'ok' : 'err');
+  } catch(e) { msg('fw-msg', '✗ Connection error', 'err'); }
+  finally { btn.disabled = false; }
 }
 
 // ── HELPERS ───────────────────────────────────────────────────────
