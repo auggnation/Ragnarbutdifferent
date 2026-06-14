@@ -1189,26 +1189,25 @@ function _drawBubbles(ts) {
       bctx.fillText(hostLabel, n.x, n.y - n.r - 3);
     }
 
-    // IP label inside sphere (last 2 octets, prominent)
-    const fontSize = Math.max(9, Math.min(14, n.r * 0.58));
+    // Label inside sphere — hostname short (up to 8 chars) or last IP octet
+    const fontSize = Math.max(8, Math.min(13, n.r * 0.56));
     bctx.fillStyle = '#ffffff';
     bctx.font = `bold ${fontSize}px 'Courier New', monospace`;
     bctx.textAlign = 'center';
     bctx.textBaseline = 'middle';
-    bctx.fillText(n.ip.split('.').slice(-2).join('.'), n.x, n.y);
+    const shortLabel = n.hostname
+      ? (n.hostname.length > 8 ? n.hostname.slice(0, 7) + '…' : n.hostname)
+      : '.' + n.ip.split('.').pop();
+    bctx.fillText(shortLabel, n.x, n.y);
 
-    // Labels below sphere: full MAC + data rate (always shown)
-    const labelY = n.y + n.r + 10;
-    bctx.font = '8px \'Courier New\', monospace';
-    bctx.fillStyle = pal.accent || pal.primary;
-    bctx.textBaseline = 'top';
-    if (n.mac) {
-      bctx.fillText(n.mac, n.x, labelY);
+    // Below-sphere rate label only when device is active (transferring data)
+    if (n.rateIn > 500 || n.rateOut > 500) {
+      const labelY = n.y + n.r + 8;
+      bctx.font = '8px \'Courier New\', monospace';
+      bctx.fillStyle = pal.accent || pal.primary;
+      bctx.textBaseline = 'top';
+      bctx.fillText(`↓${_fmtRate(n.rateIn)} ↑${_fmtRate(n.rateOut)}`, n.x, labelY);
     }
-    const rateStr = (n.rateIn > 200 || n.rateOut > 200)
-      ? `↓${_fmtRate(n.rateIn)} ↑${_fmtRate(n.rateOut)}`
-      : `${n.ip}`;
-    bctx.fillText(rateStr, n.x, labelY + 11);
   });
 
   requestAnimationFrame(_drawBubbles);
