@@ -136,8 +136,9 @@ _CONFIG_SAFE_KEYS = {
     'notify_on_disconnect', 'notify_on_reconnect',
     # Monthly device report
     'monthly_report_enabled', 'monthly_report_email', 'monthly_report_last',
-    # Manual VLAN/subnet list
-    'manual_vlans',
+    # Manual VLAN IDs and extra subnets
+    'manual_vlan_ids', 'manual_subnets',
+    'manual_vlans',   # legacy — kept for backward compat
     # Display preferences
     'mac_format', 'ip_format',
     # Firewall integration (OPNsense / pfSense)

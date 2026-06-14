@@ -419,6 +419,24 @@ class TrafficMonitor:
             pass
         return ""
 
+    def _vlan_id_to_subnet(self, vlan_id: int) -> str:
+        """Find the network subnet for a VLAN ID by checking VLAN interfaces."""
+        import ipaddress
+        candidates = [
+            f'eth0.{vlan_id}', f'eth1.{vlan_id}',
+            f'vlan{vlan_id}', f'vlan.{vlan_id}',
+            f'wlan0.{vlan_id}', f'ens3.{vlan_id}', f'ens4.{vlan_id}',
+        ]
+        for iface in candidates:
+            cidr = self._get_subnet(iface)
+            if cidr:
+                try:
+                    net = ipaddress.IPv4Interface(cidr).network
+                    return str(net)
+                except Exception:
+                    pass
+        return ""
+
     # ── Device discovery ──────────────────────────────────────────────
 
     def _resolve_hostname(self, ip):
@@ -478,23 +496,31 @@ class TrafficMonitor:
             subnet = self.subnet
 
         subnets = self._discover_subnets() if not subnet else [subnet]
-        # Merge manually configured subnets from settings
-        # Entries may be plain strings (old format) or {vlan, name, subnet} objects
         cfg = getattr(self.shared_data, 'config', {}) if self.shared_data else {}
         subnet_labels: dict = {}  # subnet → display label
+
+        # VLAN IDs — find their subnet via VLAN interface (eth0.10, vlan10, etc.)
+        for vlan_id in cfg.get('manual_vlan_ids', []):
+            sn = self._vlan_id_to_subnet(int(vlan_id))
+            if sn and sn not in subnets:
+                subnets.append(sn)
+                subnet_labels[sn] = f"VLAN {vlan_id}  {sn}"
+            elif not sn:
+                logger.debug(f"VLAN {vlan_id}: no interface found (eth0.{vlan_id}/vlan{vlan_id})")
+
+        # Extra subnets — added directly
+        for sn in cfg.get('manual_subnets', []):
+            if sn and sn not in subnets:
+                subnets.append(sn)
+
+        # Legacy manual_vlans (plain strings or {vlan,name,subnet} objects)
         for entry in cfg.get('manual_vlans', []):
             if isinstance(entry, str):
-                extra, label = entry, entry
+                extra = entry
             else:
                 extra = entry.get('subnet', '')
-                parts = []
-                if entry.get('vlan'):  parts.append(f"VLAN {entry['vlan']}")
-                if entry.get('name'):  parts.append(entry['name'])
-                label = ('  —  '.join(parts) + '  ' if parts else '') + extra
             if extra and extra not in subnets:
                 subnets.append(extra)
-            if extra:
-                subnet_labels[extra] = label
         all_devices = []
 
         for sn in subnets:
