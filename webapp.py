@@ -538,14 +538,14 @@ def api_devices_all():
 
 @app.route('/api/highscores')
 def api_highscores():
-    """Return Hall of Records — 4 categories computed live by the traffic monitor."""
+    """Return Hall of Records — device categories + speed test leaderboards."""
     mon = _monitor()
     if mon and hasattr(mon, 'get_hall_of_records'):
         try:
-            return jsonify({'categories': mon.get_hall_of_records()})
+            return jsonify(mon.get_hall_of_records())
         except Exception as e:
             logger.warning(f"Hall of Records error: {e}")
-    return jsonify({'categories': []})
+    return jsonify({'categories': [], 'top_dl': [], 'top_ul': []})
 
 
 @app.route('/api/firewall/test', methods=['POST'])

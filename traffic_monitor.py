@@ -127,6 +127,9 @@ class TrafficMonitor:
         self.speedtest_running = False
         self._speedtest_thread = None
 
+        # Speed test history — kept for Hall of Records (top 10 by dl / ul)
+        self._speedtest_history = []   # [{dl, ul, ping, at}], max 50 entries
+
         # Refresh timers
         self._last_info_update = 0.0
         self._last_style_cycle = 0.0
@@ -854,11 +857,16 @@ class TrafficMonitor:
             logger.warning(f"Speed test failed: {exc}")
 
         if dl > 0 or ul > 0:
+            ts = time.strftime('%Y-%m-%dT%H:%M:%S')
             with self._lock:
                 self.speedtest_dl   = dl
                 self.speedtest_ul   = ul
                 self.speedtest_ping = ping
                 self.speedtest_at   = time.strftime('%H:%M')
+                self._speedtest_history.append({'dl': round(dl, 1), 'ul': round(ul, 1),
+                                                'ping': round(ping, 1), 'at': ts})
+                self._speedtest_history = self._speedtest_history[-50:]
+            self._save_stats()
             logger.info(f"Speed test: ↓{dl:.1f} ↑{ul:.1f} Mbps  ping {ping:.0f}ms")
         else:
             logger.warning("Speed test returned zero results")
@@ -959,10 +967,12 @@ class TrafficMonitor:
                 return
             with open(self._stats_path, 'r') as f:
                 data = _json.load(f)
-            self._daily_history = data.get('daily_history', [])
+            self._daily_history     = data.get('daily_history', [])
+            self._speedtest_history = data.get('speedtest_history', [])
             if data.get('today_date') == self._today_str:
                 self._daily_traffic = data.get('today_traffic', {})
-            logger.info(f"Loaded device stats ({len(self._daily_history)} days of history)")
+            logger.info(f"Loaded device stats ({len(self._daily_history)} days, "
+                        f"{len(self._speedtest_history)} speed tests)")
         except Exception as e:
             logger.warning(f"Stats load error: {e}")
 
@@ -971,9 +981,10 @@ class TrafficMonitor:
             os.makedirs(os.path.dirname(self._stats_path), exist_ok=True)
             with self._lock:
                 data = {
-                    'today_date':    self._today_str,
-                    'today_traffic': dict(self._daily_traffic),
-                    'daily_history': list(self._daily_history),
+                    'today_date':        self._today_str,
+                    'today_traffic':     dict(self._daily_traffic),
+                    'daily_history':     list(self._daily_history),
+                    'speedtest_history': list(self._speedtest_history),
                 }
             with open(self._stats_path, 'w') as f:
                 _json.dump(data, f)
@@ -1097,4 +1108,31 @@ class TrafficMonitor:
                     'raw':      int(agg_30[top30]),
                 })
 
-        return categories
+        # ── Speed test leaderboards ──────────────────────────────────
+        with self._lock:
+            st_history = list(self._speedtest_history)
+
+        def _fmt_ts(iso):
+            try:
+                t = time.strptime(iso, '%Y-%m-%dT%H:%M:%S')
+                return time.strftime('%b %d  %H:%M', t)
+            except Exception:
+                return iso
+
+        top_dl = sorted(st_history, key=lambda r: r.get('dl', 0), reverse=True)[:10]
+        top_ul = sorted(st_history, key=lambda r: r.get('ul', 0), reverse=True)[:10]
+
+        speed_rows_dl = [
+            {'dl': r['dl'], 'ul': r['ul'], 'ping': r['ping'], 'at': _fmt_ts(r['at'])}
+            for r in top_dl
+        ]
+        speed_rows_ul = [
+            {'dl': r['dl'], 'ul': r['ul'], 'ping': r['ping'], 'at': _fmt_ts(r['at'])}
+            for r in top_ul
+        ]
+
+        return {
+            'categories':  categories,
+            'top_dl':      speed_rows_dl,
+            'top_ul':      speed_rows_ul,
+        }

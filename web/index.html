@@ -205,6 +205,17 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 .hof-card-ip{font-size:9px;opacity:.35;letter-spacing:1px}
 .hof-card-value{font-size:13px;font-weight:700;letter-spacing:2px;color:#0f0}
 #hof-empty{padding:20px 14px;text-align:center;opacity:.35;font-size:10px;letter-spacing:2px}
+.hof-speed-row{
+  display:grid;grid-template-columns:18px 1fr 1fr 1fr 1fr;
+  padding:4px 14px;gap:4px;font-size:9px;align-items:baseline;
+  border-bottom:1px solid rgba(255,255,255,.03);
+}
+.hof-speed-row:last-child{border-bottom:none}
+.hof-speed-rank{color:rgba(255,255,255,.25);font-size:8px}
+.hof-speed-dl{color:#0f0;font-weight:700;letter-spacing:1px}
+.hof-speed-ul{color:#0af;font-weight:700;letter-spacing:1px}
+.hof-speed-ping{color:#fa0;letter-spacing:1px}
+.hof-speed-date{opacity:.3;font-size:8px;text-align:right}
 
 /* ── Device bubble canvas ─────────────────────────────────────── */
 #bubbles{position:fixed;inset:0;width:100%;height:100%;z-index:2;pointer-events:auto;cursor:crosshair}
@@ -1338,17 +1349,38 @@ el('speedtest-btn').addEventListener('click', async () => {
 // ── Hall of Records ────────────────────────────────────────────────
 const _hofPanel = el('hof-panel');
 
+function _hofSpeedRows(rows) {
+  if (!rows || !rows.length) return '<div style="padding:6px 14px;font-size:9px;opacity:.3">No tests recorded yet</div>';
+  const hdr = `<div class="hof-speed-row" style="opacity:.35">
+    <span></span><span>↓ DOWN</span><span>↑ UP</span><span>PING</span><span style="text-align:right">WHEN</span></div>`;
+  return hdr + rows.map((r, i) => `
+    <div class="hof-speed-row">
+      <span class="hof-speed-rank">${i + 1}</span>
+      <span class="hof-speed-dl">${r.dl} <span style="font-weight:400;opacity:.6">Mbps</span></span>
+      <span class="hof-speed-ul">${r.ul} <span style="font-weight:400;opacity:.6">Mbps</span></span>
+      <span class="hof-speed-ping">${r.ping}<span style="opacity:.5">ms</span></span>
+      <span class="hof-speed-date">${r.at}</span>
+    </div>`).join('');
+}
+
 async function _loadHof() {
   const list = el('hof-list');
   try {
     const r = await fetch('/api/highscores');
     const d = await r.json();
-    const cats = d.categories || [];
-    if (!cats.length) {
+    const cats   = d.categories || [];
+    const topDl  = d.top_dl     || [];
+    const topUl  = d.top_ul     || [];
+
+    if (!cats.length && !topDl.length && !topUl.length) {
       list.innerHTML = '<div id="hof-empty">No records yet — keep monitoring!</div>';
       return;
     }
-    list.innerHTML = cats.map(c => `
+
+    let html = '';
+
+    // Device categories
+    html += cats.map(c => `
       <div class="hof-cat"><span class="hof-cat-icon">${c.icon || '🏆'}</span>${c.title}</div>
       <div class="hof-card">
         <div class="hof-card-device">${c.device}</div>
@@ -1357,6 +1389,14 @@ async function _loadHof() {
           <span class="hof-card-value">${c.value}</span>
         </div>
       </div>`).join('');
+
+    // Speed test leaderboards
+    html += `<div class="hof-cat"><span class="hof-cat-icon">⚡</span>TOP DOWNLOAD SPEEDS</div>`;
+    html += _hofSpeedRows(topDl);
+    html += `<div class="hof-cat"><span class="hof-cat-icon">🚀</span>TOP UPLOAD SPEEDS</div>`;
+    html += _hofSpeedRows(topUl);
+
+    list.innerHTML = html;
   } catch (e) {
     list.innerHTML = '<div id="hof-empty">Unable to load records</div>';
   }
