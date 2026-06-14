@@ -58,34 +58,57 @@ def _opnsense_post(s: requests.Session, base: str, path: str, auth: tuple, body=
     return r.json()
 
 
+def _norm_mac(raw: str) -> str:
+    return raw.lower().replace('-', ':').strip()
+
+
+def _best_name(hostname: str, descr: str) -> str:
+    """Return the most useful display name — prefer hostname, fall back to description."""
+    h = (hostname or '').strip()
+    d = (descr    or '').strip()
+    return h or d
+
+
 def _opnsense_hostnames(base_url: str, key: str, secret: str, verify_ssl: bool) -> dict:
-    """Return {mac: hostname} from OPNsense DHCP leases + ARP table."""
+    """Return {mac: name} from OPNsense — leases, static mappings, and ARP table."""
     base = _make_base_url(base_url)
     s    = _session(verify_ssl)
     auth = (key, secret)
     mac_host: dict[str, str] = {}
 
-    # 1. DHCP leases — most reliable source of hostname
+    def _add(mac_raw, hostname, descr=''):
+        mac  = _norm_mac(mac_raw)
+        name = _best_name(hostname, descr)
+        if mac and name and mac not in mac_host:
+            mac_host[mac] = name
+
+    # 1. Active DHCP leases
+    # NOTE: OPNsense uses 'hwaddr' (not 'mac') for the MAC field in lease rows.
     try:
         data = _opnsense_get(s, base, 'dhcpv4/leases/search_lease', auth)
         for row in data.get('rows', []):
-            mac  = (row.get('mac')      or '').lower().replace('-', ':').strip()
-            host = (row.get('hostname') or '').strip()
-            if mac and host:
-                mac_host[mac] = host
-        logger.debug(f"OPNsense DHCP leases: {len(mac_host)} hostnames")
+            mac_raw = row.get('hwaddr') or row.get('mac') or ''
+            _add(mac_raw, row.get('hostname', ''), row.get('descr', ''))
+        logger.debug(f"OPNsense DHCP leases: {len(mac_host)} names so far")
     except Exception as e:
         logger.warning(f"OPNsense DHCP lease fetch failed: {e}")
 
-    # 2. ARP table — fills in devices not in DHCP (static IPs, etc.)
+    # 2. Static DHCP mappings — contain user-set descriptions (best source of friendly names)
+    try:
+        data = _opnsense_get(s, base, 'dhcpv4/settings/searchStaticMap', auth)
+        for row in data.get('rows', []):
+            mac_raw = row.get('mac') or row.get('hw') or ''
+            _add(mac_raw, row.get('hostname', ''), row.get('descr', ''))
+        logger.debug(f"OPNsense static maps: {len(mac_host)} names so far")
+    except Exception as e:
+        logger.debug(f"OPNsense static DHCP fetch skipped: {e}")
+
+    # 3. ARP table — fills in devices not in DHCP (static IPs, etc.)
     try:
         data = _opnsense_get(s, base, 'diagnostics/interface/get_arp', auth)
         for row in data.get('rows', []):
-            mac  = (row.get('mac')      or '').lower().replace('-', ':').strip()
-            host = (row.get('hostname') or '').strip()
-            if mac and host and mac not in mac_host:
-                mac_host[mac] = host
-        logger.debug(f"OPNsense ARP enriched to: {len(mac_host)} total hostnames")
+            _add(row.get('mac', ''), row.get('hostname', ''))
+        logger.debug(f"OPNsense after ARP: {len(mac_host)} total names")
     except Exception as e:
         logger.warning(f"OPNsense ARP fetch failed: {e}")
 
@@ -162,32 +185,41 @@ def _pfsense_get(s: requests.Session, base: str, path: str, key: str, secret: st
 
 
 def _pfsense_hostnames(base_url: str, key: str, secret: str, verify_ssl: bool) -> dict:
-    """Return {mac: hostname} from pfSense DHCP leases + ARP table."""
+    """Return {mac: name} from pfSense DHCP leases, static mappings, and ARP table."""
     base = _make_base_url(base_url)
     s    = _session(verify_ssl)
     mac_host: dict[str, str] = {}
 
-    # 1. DHCP leases
+    def _add(mac_raw, hostname, descr=''):
+        mac  = _norm_mac(mac_raw)
+        name = _best_name(hostname, descr)
+        if mac and name and mac not in mac_host:
+            mac_host[mac] = name
+
+    # 1. Active DHCP leases
     try:
         data = _pfsense_get(s, base, 'api/v1/services/dhcpd/lease', key, secret)
         for row in (data.get('data') or []):
-            mac  = (row.get('mac')      or '').lower().replace('-', ':').strip()
-            host = (row.get('hostname') or '').strip()
-            if mac and host:
-                mac_host[mac] = host
-        logger.debug(f"pfSense DHCP leases: {len(mac_host)} hostnames")
+            _add(row.get('mac', ''), row.get('hostname', ''), row.get('descr', ''))
+        logger.debug(f"pfSense DHCP leases: {len(mac_host)} names so far")
     except Exception as e:
         logger.warning(f"pfSense DHCP lease fetch failed: {e}")
 
-    # 2. ARP table
+    # 2. Static DHCP mappings — contain user-set descriptions
+    try:
+        data = _pfsense_get(s, base, 'api/v1/services/dhcpd/static_mapping', key, secret)
+        for row in (data.get('data') or []):
+            _add(row.get('mac', ''), row.get('hostname', ''), row.get('descr', ''))
+        logger.debug(f"pfSense static maps: {len(mac_host)} names so far")
+    except Exception as e:
+        logger.debug(f"pfSense static DHCP fetch skipped: {e}")
+
+    # 3. ARP table
     try:
         data = _pfsense_get(s, base, 'api/v1/diagnostics/arp', key, secret)
         for row in (data.get('data') or []):
-            mac  = (row.get('mac')      or '').lower().replace('-', ':').strip()
-            host = (row.get('hostname') or '').strip()
-            if mac and host and mac not in mac_host:
-                mac_host[mac] = host
-        logger.debug(f"pfSense ARP enriched to: {len(mac_host)} total hostnames")
+            _add(row.get('mac', ''), row.get('hostname', ''))
+        logger.debug(f"pfSense after ARP: {len(mac_host)} total names")
     except Exception as e:
         logger.warning(f"pfSense ARP fetch failed: {e}")
 
