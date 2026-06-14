@@ -138,6 +138,11 @@ _CONFIG_SAFE_KEYS = {
     'monthly_report_enabled', 'monthly_report_email', 'monthly_report_last',
     # Manual VLAN/subnet list
     'manual_vlans',
+    # Display preferences
+    'mac_format', 'ip_format',
+    # Firewall integration (OPNsense / pfSense)
+    'firewall_type', 'firewall_url', 'firewall_api_key',
+    'firewall_api_secret', 'firewall_verify_ssl',
 }
 
 
@@ -545,6 +550,27 @@ def api_highscores():
     except Exception as e:
         logger.warning(f"Highscores read error: {e}")
     return jsonify({'records': []})
+
+
+@app.route('/api/firewall/test', methods=['POST'])
+def api_firewall_test():
+    """Test connectivity to the configured firewall API."""
+    try:
+        from firewall_integration import test_firewall_connection
+        data = request.get_json(silent=True) or {}
+        fw_type  = data.get('firewall_type', '')
+        fw_url   = data.get('firewall_url', '')
+        fw_key   = data.get('firewall_api_key', '')
+        fw_sec   = data.get('firewall_api_secret', '')
+        fw_ssl   = data.get('firewall_verify_ssl', False)
+        if not fw_type or not fw_url:
+            return jsonify({'ok': False, 'error': 'Firewall type and URL are required'})
+        ok, msg = test_firewall_connection(fw_type, fw_url, fw_key, fw_sec, fw_ssl)
+        return jsonify({'ok': ok, 'message': msg})
+    except ImportError:
+        return jsonify({'ok': False, 'error': 'firewall_integration module not found'})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────
