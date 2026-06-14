@@ -197,9 +197,40 @@ def _pfsense_hostnames(base_url: str, key: str, secret: str, verify_ssl: bool) -
 def _pfsense_test(base_url: str, key: str, secret: str, verify_ssl: bool):
     base = _make_base_url(base_url)
     s    = _session(verify_ssl)
-    data = _pfsense_get(s, base, 'api/v1/system/version', key, secret)
-    ver  = (data.get('data') or {}).get('version', '?')
-    return True, f"pfSense {ver} — connected to {base}"
+
+    # Step 1 — host reachable?
+    try:
+        s.get(base, timeout=5, allow_redirects=True)
+    except requests.exceptions.SSLError:
+        return False, (
+            f"SSL certificate error connecting to {base}. "
+            "Uncheck 'Verify SSL certificate' — pfSense also uses a self-signed cert by default."
+        )
+    except requests.exceptions.ConnectionError:
+        return False, f"Cannot reach {base} — check the IP address and that port 443 is open."
+    except requests.exceptions.Timeout:
+        return False, f"Timed out connecting to {base}."
+
+    # Step 2 — API with credentials
+    try:
+        data = _pfsense_get(s, base, 'api/v1/system/version', key, secret)
+        ver  = (data.get('data') or {}).get('version', '?')
+        return True, f"pfSense {ver} connected at {base}"
+    except requests.exceptions.HTTPError as e:
+        code = e.response.status_code if e.response is not None else '?'
+        if code == 401:
+            return False, (
+                f"Host {base} is reachable but authentication failed (HTTP 401). "
+                "Check your API client-id and client-token in pfSense under System → API."
+            )
+        if code == 404:
+            return False, (
+                f"API not found (HTTP 404) at {base}/api/v1/system/version. "
+                "Ensure the pfSense-API package is installed (System → Package Manager)."
+            )
+        return False, f"HTTP {code} from {base} — {e}"
+    except Exception as e:
+        return False, f"API error from {base}: {e}"
 
 
 # ── Public API ────────────────────────────────────────────────────────
