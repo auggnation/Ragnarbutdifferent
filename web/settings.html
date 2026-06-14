@@ -181,31 +181,40 @@ html,body{background:#050510;color:#fff;font-family:'Courier New',monospace;min-
     </div>
   </div>
 
-  <!-- VLAN / EXTRA SUBNETS -->
+  <!-- VLAN IDs -->
   <div class="section">
-    <div class="section-header">VLAN / Extra Subnets to Scan</div>
+    <div class="section-header">VLAN IDs to Scan</div>
     <div class="section-body">
-      <div id="vlan-list" class="net-list">
+      <div id="vlanid-list" class="net-list">
         <div class="net-item" style="opacity:.4">Loading…</div>
       </div>
-      <div style="display:grid;grid-template-columns:80px 1fr 1fr;gap:8px;margin-top:10px;align-items:end">
-        <div class="field" style="margin:0">
-          <label>VLAN #</label>
-          <input type="number" id="vlan-num" min="1" max="4094" placeholder="10" style="width:100%">
-        </div>
-        <div class="field" style="margin:0">
-          <label>Name <span style="opacity:.4">(optional)</span></label>
-          <input type="text" id="vlan-name" placeholder="e.g. IoT" style="width:100%">
-        </div>
-        <div class="field" style="margin:0">
-          <label>Subnet (CIDR) <span style="opacity:.4">*required</span></label>
-          <input type="text" id="vlan-input" placeholder="192.168.10.0/24" style="width:100%">
-        </div>
+      <div class="field" style="margin-top:10px">
+        <label>VLAN Number</label>
+        <input type="number" id="vlanid-input" min="1" max="4094" placeholder="e.g. 10">
+        <div class="field-note">Pi will scan the subnet on VLAN interface eth0.&lt;id&gt; / vlan&lt;id&gt; — the interface must exist on this Pi</div>
       </div>
-      <div class="field-note" style="margin-top:4px">Added to auto-detected subnets — re-scan after adding</div>
-      <div class="btn-row" style="margin-top:8px">
-        <button class="btn primary" onclick="addVlan()">Add</button>
-        <span class="msg" id="vlan-msg"></span>
+      <div class="btn-row">
+        <button class="btn primary" onclick="addVlanId()">Add VLAN</button>
+        <span class="msg" id="vlanid-msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXTRA SUBNETS -->
+  <div class="section">
+    <div class="section-header">Extra Subnets to Scan</div>
+    <div class="section-body">
+      <div id="subnet-list" class="net-list">
+        <div class="net-item" style="opacity:.4">Loading…</div>
+      </div>
+      <div class="field" style="margin-top:10px">
+        <label>Subnet (CIDR)</label>
+        <input type="text" id="subnet-input" placeholder="e.g. 192.168.10.0/24">
+        <div class="field-note">Scanned directly — use this if you know the IP range but don't have a VLAN interface</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="addSubnet()">Add Subnet</button>
+        <span class="msg" id="subnet-msg"></span>
       </div>
     </div>
   </div>
