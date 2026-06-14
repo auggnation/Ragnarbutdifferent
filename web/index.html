@@ -1002,6 +1002,26 @@ const bubbleCanvas = el('bubbles');
 const bctx = bubbleCanvas.getContext('2d');
 
 let _ipFmt = 'full';  // 'full' = x.x.x.x, 'last' = x.x (last 2 octets)
+let _vlanSubnets = [];
+let _vlanLabels  = [];
+
+function _ipInCidr(ip, cidr) {
+  try {
+    const [net, bits] = cidr.split('/');
+    const prefix = parseInt(bits, 10);
+    if (prefix === 0) return true;
+    const mask = (0xFFFFFFFF << (32 - prefix)) >>> 0;
+    const toInt = a => a.split('.').reduce((n, o) => (n * 256 + parseInt(o, 10)), 0) >>> 0;
+    return (toInt(ip) & mask) === (toInt(net) & mask);
+  } catch(e) { return false; }
+}
+
+function _getVlanLabel(ip) {
+  for (let i = 0; i < _vlanSubnets.length; i++) {
+    if (_ipInCidr(ip, _vlanSubnets[i])) return _vlanLabels[i] || _vlanSubnets[i];
+  }
+  return '';
+}
 
 // node: {ip, mac, label, x, y, vx, vy, r, targetR, rateIn, rateOut, connections, pulse, radarFlash}
 let _bubbleNodes = {};
@@ -1179,39 +1199,60 @@ function _drawBubbles(ts) {
     bctx.fillStyle = hiGrad;
     bctx.fill();
 
-    // Hostname label above sphere
-    const hostLabel = (n.hostname && n.hostname !== n.ip)
-      ? (n.hostname.length > 14 ? n.hostname.slice(0, 13) + '…' : n.hostname)
-      : '';
-    if (hostLabel) {
-      bctx.font = `bold 9px 'Courier New', monospace`;
-      bctx.fillStyle = '#ffffff';
-      bctx.textAlign = 'center';
-      bctx.textBaseline = 'bottom';
-      bctx.fillText(hostLabel, n.x, n.y - n.r - 3);
-    }
-
-    // Label inside sphere — hostname short (up to 8 chars) or last IP octet
+    // Label inside sphere — short hostname or short IP
     const fontSize = Math.max(8, Math.min(13, n.r * 0.56));
     bctx.fillStyle = '#ffffff';
     bctx.font = `bold ${fontSize}px 'Courier New', monospace`;
     bctx.textAlign = 'center';
     bctx.textBaseline = 'middle';
-    const ipLabel = _ipFmt === 'last'
+    const ipShort = _ipFmt === 'last'
       ? n.ip.split('.').slice(-2).join('.')
       : n.ip;
-    const shortLabel = n.hostname
+    const innerLabel = n.hostname
       ? (n.hostname.length > 8 ? n.hostname.slice(0, 7) + '…' : n.hostname)
-      : ipLabel;
-    bctx.fillText(shortLabel, n.x, n.y);
+      : ipShort;
+    bctx.fillText(innerLabel, n.x, n.y);
 
-    // Below-sphere rate label only when device is active (transferring data)
+    // Info block below the sphere — hostname / IP / MAC / VLAN
+    const infoFont  = '7px \'Courier New\', monospace';
+    const lineH     = 9;
+    let   infoY     = n.y + n.r + 5;
+    bctx.font        = infoFont;
+    bctx.textAlign   = 'center';
+    bctx.textBaseline = 'top';
+
+    // Hostname (if present and different from inner label)
+    if (n.hostname && n.hostname !== innerLabel) {
+      bctx.fillStyle = '#ffffffcc';
+      bctx.fillText(n.hostname.length > 16 ? n.hostname.slice(0, 15) + '…' : n.hostname, n.x, infoY);
+      infoY += lineH;
+    }
+    // IP address
+    const ipFull = _ipFmt === 'last' ? n.ip.split('.').slice(-2).join('.') : n.ip;
+    bctx.fillStyle = '#aaddffaa';
+    bctx.fillText(ipFull, n.x, infoY);
+    infoY += lineH;
+    // MAC address (last 3 groups abbreviated)
+    if (n.mac) {
+      const macParts = n.mac.split(':');
+      const macShort = macParts.length >= 3
+        ? macParts.slice(-3).join(':').toLowerCase()
+        : n.mac.toLowerCase();
+      bctx.fillStyle = '#88aabb99';
+      bctx.fillText(macShort, n.x, infoY);
+      infoY += lineH;
+    }
+    // VLAN label
+    const vlanLbl = _getVlanLabel(n.ip);
+    if (vlanLbl) {
+      bctx.fillStyle = '#ffcc6688';
+      bctx.fillText(vlanLbl.length > 18 ? vlanLbl.slice(0, 17) + '…' : vlanLbl, n.x, infoY);
+      infoY += lineH;
+    }
+    // Traffic rate (only when active)
     if (n.rateIn > 500 || n.rateOut > 500) {
-      const labelY = n.y + n.r + 8;
-      bctx.font = '8px \'Courier New\', monospace';
       bctx.fillStyle = pal.accent || pal.primary;
-      bctx.textBaseline = 'top';
-      bctx.fillText(`↓${_fmtRate(n.rateIn)} ↑${_fmtRate(n.rateOut)}`, n.x, labelY);
+      bctx.fillText(`↓${_fmtRate(n.rateIn)} ↑${_fmtRate(n.rateOut)}`, n.x, infoY);
     }
   });
 
@@ -1261,14 +1302,16 @@ bubbleCanvas.addEventListener('mouseleave', () => {
 
 
 function updateVlans(vlans, labels, subnet, gateway) {
-  const list = el('vlans-list');
   const nets = vlans && vlans.length ? vlans : (subnet ? [subnet] : []);
+  _vlanSubnets = nets;
+  _vlanLabels  = labels && labels.length ? labels : nets;
+  const list = el('vlans-list');
   if (!nets.length) {
     list.innerHTML = '<div class="vlan-item" style="opacity:.4">No subnets found</div>';
     return;
   }
   list.innerHTML = nets.map((n, i) => {
-    const lbl = (labels && labels[i] && labels[i] !== n) ? labels[i] : n;
+    const lbl = (_vlanLabels[i] && _vlanLabels[i] !== n) ? _vlanLabels[i] : n;
     return `<div class="vlan-item">${lbl}</div>`;
   }).join('');
   if (gateway) {
