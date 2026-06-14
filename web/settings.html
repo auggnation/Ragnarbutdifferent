@@ -327,17 +327,18 @@ html,body{background:#050510;color:#fff;font-family:'Courier New',monospace;min-
       </div>
       <div id="fw-fields" style="display:none">
         <div class="field">
-          <label>Firewall URL</label>
-          <input type="url" id="fw-url" placeholder="https://192.168.1.1">
+          <label>Firewall IP / URL</label>
+          <input type="text" id="fw-url" placeholder="192.168.1.1  or  https://192.168.1.1">
+          <div class="field-note">IP address or full URL of your router — https:// is added automatically if omitted</div>
         </div>
-        <div class="field">
-          <label>API Key</label>
-          <input type="text" id="fw-key" placeholder="key">
+        <div class="field" id="fw-key-wrap">
+          <label id="fw-key-label">API Key</label>
+          <input type="text" id="fw-key" placeholder="">
         </div>
-        <div class="field">
+        <div class="field" id="fw-secret-wrap">
           <label>API Secret</label>
-          <input type="password" id="fw-secret" placeholder="secret">
-          <div class="field-note">OPNsense: key + secret pair · pfSense: use key only (Bearer token)</div>
+          <input type="password" id="fw-secret" placeholder="">
+          <div class="field-note" id="fw-auth-note"></div>
         </div>
         <label class="check-row">
           <input type="checkbox" id="fw-ssl">
@@ -730,8 +731,29 @@ async function saveDisplay() {
 function toggleFwFields() {
   const t = document.getElementById('fw-type').value;
   const show = !!t;
-  document.getElementById('fw-fields').style.display  = show ? '' : 'none';
+  document.getElementById('fw-fields').style.display   = show ? '' : 'none';
   document.getElementById('fw-test-btn').style.display = show ? '' : 'none';
+  if (!show) return;
+
+  const keyLabel  = document.getElementById('fw-key-label');
+  const authNote  = document.getElementById('fw-auth-note');
+  const secretWrap = document.getElementById('fw-secret-wrap');
+  const keyEl     = document.getElementById('fw-key');
+  const secEl     = document.getElementById('fw-secret');
+
+  if (t === 'opnsense') {
+    keyLabel.textContent    = 'API Key';
+    keyEl.placeholder       = 'your-api-key';
+    secEl.placeholder       = 'your-api-secret';
+    secretWrap.style.display = '';
+    authNote.textContent    = 'OPNsense: System → Access → Users → API Keys — generate a key+secret pair. User needs Diagnostics + DHCP privileges.';
+  } else if (t === 'pfsense') {
+    keyLabel.textContent    = 'API Client ID';
+    keyEl.placeholder       = 'client-id';
+    secEl.placeholder       = 'client-token  (leave blank for Bearer-only auth)';
+    secretWrap.style.display = '';
+    authNote.textContent    = 'pfSense: requires the pfSense-API package. System → API → Keys to generate credentials.';
+  }
 }
 
 async function saveFirewall() {

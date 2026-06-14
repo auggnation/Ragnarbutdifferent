@@ -465,8 +465,28 @@ class TrafficMonitor:
             devices = self._scan_subnet(sn, iface)
             all_devices.extend(devices)
 
-        # Enrich hostnames for devices that don't have one
+        # Enrich hostnames from firewall API (OPNsense / pfSense) if configured
+        _fw_map: dict = {}
+        cfg = getattr(self.shared_data, 'config', {}) if self.shared_data else {}
+        _fw_type = cfg.get('firewall_type', '')
+        _fw_url  = cfg.get('firewall_url', '')
+        if _fw_type and _fw_url:
+            try:
+                from firewall_integration import fetch_hostnames as _fw_fetch
+                _fw_map = _fw_fetch(
+                    _fw_type, _fw_url,
+                    cfg.get('firewall_api_key', ''),
+                    cfg.get('firewall_api_secret', ''),
+                    bool(cfg.get('firewall_verify_ssl', False)),
+                )
+            except Exception as _e:
+                logger.debug(f"Firewall hostname enrichment skipped: {_e}")
+
+        # Enrich hostnames — firewall map first, then local DNS/mDNS/NetBIOS
         for dev in all_devices:
+            mac = (dev.get('mac') or '').lower().replace('-', ':').strip()
+            if _fw_map and mac and not dev.get('hostname'):
+                dev['hostname'] = _fw_map.get(mac, '')
             if not dev.get('hostname'):
                 dev['hostname'] = self._resolve_hostname(dev['ip'])
 
