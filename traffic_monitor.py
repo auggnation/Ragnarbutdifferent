@@ -499,28 +499,25 @@ class TrafficMonitor:
         cfg = getattr(self.shared_data, 'config', {}) if self.shared_data else {}
         subnet_labels: dict = {}  # subnet → display label
 
-        # VLAN IDs — find their subnet via VLAN interface (eth0.10, vlan10, etc.)
-        for vlan_id in cfg.get('manual_vlan_ids', []):
-            sn = self._vlan_id_to_subnet(int(vlan_id))
-            if sn and sn not in subnets:
-                subnets.append(sn)
-                subnet_labels[sn] = f"VLAN {vlan_id}  {sn}"
-            elif not sn:
-                logger.debug(f"VLAN {vlan_id}: no interface found (eth0.{vlan_id}/vlan{vlan_id})")
-
-        # Extra subnets — added directly
-        for sn in cfg.get('manual_subnets', []):
-            if sn and sn not in subnets:
-                subnets.append(sn)
-
-        # Legacy manual_vlans (plain strings or {vlan,name,subnet} objects)
-        for entry in cfg.get('manual_vlans', []):
+        def _add_subnet(entry):
+            """Accept a plain CIDR string or {vlan, subnet} object."""
             if isinstance(entry, str):
-                extra = entry
+                sn, label = entry, entry
             else:
-                extra = entry.get('subnet', '')
-            if extra and extra not in subnets:
-                subnets.append(extra)
+                sn    = (entry.get('subnet') or '').strip()
+                vnum  = entry.get('vlan')
+                label = (f"VLAN {vnum}  " if vnum else '') + sn
+            if sn and sn not in subnets:
+                subnets.append(sn)
+                subnet_labels[sn] = label
+
+        # manual_subnets — new key (plain strings or {vlan, subnet} objects)
+        for entry in cfg.get('manual_subnets', []):
+            _add_subnet(entry)
+
+        # manual_vlans — legacy key (backward compat)
+        for entry in cfg.get('manual_vlans', []):
+            _add_subnet(entry)
         all_devices = []
 
         for sn in subnets:
