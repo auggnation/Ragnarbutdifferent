@@ -317,6 +317,8 @@ def api_settings():
     return jsonify({
         'device_name': _shared_data.config.get('device_name', 'MILD-VIKING'),
         'password_set': pw_set,
+        'ip_format':   _shared_data.config.get('ip_format', 'full'),
+        'mac_format':  _shared_data.config.get('mac_format', 'full'),
     })
 
 

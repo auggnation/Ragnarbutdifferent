@@ -1001,6 +1001,8 @@ function updateHUD(data) {
 const bubbleCanvas = el('bubbles');
 const bctx = bubbleCanvas.getContext('2d');
 
+let _ipFmt = 'full';  // 'full' = x.x.x.x, 'last' = x.x (last 2 octets)
+
 // node: {ip, mac, label, x, y, vx, vy, r, targetR, rateIn, rateOut, connections, pulse, radarFlash}
 let _bubbleNodes = {};
 let _sphereRadarAngle = 0;  // always-spinning radar angle for sphere illumination
@@ -1195,9 +1197,12 @@ function _drawBubbles(ts) {
     bctx.font = `bold ${fontSize}px 'Courier New', monospace`;
     bctx.textAlign = 'center';
     bctx.textBaseline = 'middle';
+    const ipLabel = _ipFmt === 'last'
+      ? n.ip.split('.').slice(-2).join('.')
+      : n.ip;
     const shortLabel = n.hostname
       ? (n.hostname.length > 8 ? n.hostname.slice(0, 7) + '…' : n.hostname)
-      : '.' + n.ip.split('.').pop();
+      : ipLabel;
     bctx.fillText(shortLabel, n.x, n.y);
 
     // Below-sphere rate label only when device is active (transferring data)
@@ -1485,6 +1490,8 @@ let _authed = localStorage.getItem('mv_authed') === '1';
       el('title-main').textContent = d.device_name;
       document.title = d.device_name + ' // NETWORK MONITOR';
     }
+    // Load display preferences
+    if (d.ip_format) _ipFmt = d.ip_format;
     // Show password gate if password is set and not already authed
     if (d.password_set && !_authed) {
       el('pw-modal').classList.remove('hidden');
