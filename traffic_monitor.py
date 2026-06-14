@@ -1,6 +1,8 @@
 # traffic_monitor.py
 # Real-time network traffic monitoring, uptime-based leveling, and device discovery
 
+import os
+import json as _json
 import threading
 import time
 import subprocess
@@ -105,6 +107,18 @@ class TrafficMonitor:
         self._monthly_traffic = {}
         self._monthly_month   = time.strftime('%Y-%m')
 
+        # Daily per-device totals — resets at midnight, history kept 30 days
+        self._today_str      = time.strftime('%Y-%m-%d')
+        self._daily_traffic  = {}   # ip → {bytes_in, bytes_out}
+        self._daily_history  = []   # [{date, traffic: {ip: {bytes_in, bytes_out}}}]
+
+        # Persistence
+        self._stats_path  = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'data', 'device_stats.json'
+        )
+        self._last_save   = 0.0
+        self._SAVE_INTERVAL = 300.0  # save every 5 min
+
         # Speed test results
         self.speedtest_dl   = 0.0   # Mbps download
         self.speedtest_ul   = 0.0   # Mbps upload
@@ -124,6 +138,7 @@ class TrafficMonitor:
 
         # Do initial probe so data is available immediately
         self._probe_network_info()
+        self._load_stats()
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -200,6 +215,11 @@ class TrafficMonitor:
                 if now - self._last_info_update >= self._INFO_INTERVAL:
                     self._probe_network_info()
                     self._last_info_update = now
+
+                # Persist traffic stats periodically
+                if now - self._last_save >= self._SAVE_INTERVAL:
+                    self._save_stats()
+                    self._last_save = now
 
                 # Attribute traffic to devices every 5 s
                 if int(now) % 5 == 0:
@@ -726,7 +746,23 @@ class TrafficMonitor:
             self._monthly_month = cur_month
         for ip, t in updated.items():
             entry = self._monthly_traffic.setdefault(ip, {'bytes_in': 0, 'bytes_out': 0})
-            entry['bytes_in']  += t.get('rate_in',  0.0)   # accumulate bytes/s × 1 s
+            entry['bytes_in']  += t.get('rate_in',  0.0)
+            entry['bytes_out'] += t.get('rate_out', 0.0)
+
+        # Accumulate daily totals; archive and reset at day boundary
+        cur_day = time.strftime('%Y-%m-%d')
+        if cur_day != self._today_str:
+            self._daily_history.append({
+                'date':    self._today_str,
+                'traffic': dict(self._daily_traffic),
+            })
+            self._daily_history = self._daily_history[-30:]
+            self._daily_traffic = {}
+            self._today_str = cur_day
+            self._save_stats()
+        for ip, t in updated.items():
+            entry = self._daily_traffic.setdefault(ip, {'bytes_in': 0, 'bytes_out': 0})
+            entry['bytes_in']  += t.get('rate_in',  0.0)
             entry['bytes_out'] += t.get('rate_out', 0.0)
 
     # ── Speed test ────────────────────────────────────────────────────
@@ -914,3 +950,151 @@ class TrafficMonitor:
             d['bytes_out'] = int(m.get('bytes_out', 0))
             result.append(d)
         return result
+
+    # ── Stats persistence ─────────────────────────────────────────────
+
+    def _load_stats(self):
+        try:
+            if not os.path.exists(self._stats_path):
+                return
+            with open(self._stats_path, 'r') as f:
+                data = _json.load(f)
+            self._daily_history = data.get('daily_history', [])
+            if data.get('today_date') == self._today_str:
+                self._daily_traffic = data.get('today_traffic', {})
+            logger.info(f"Loaded device stats ({len(self._daily_history)} days of history)")
+        except Exception as e:
+            logger.warning(f"Stats load error: {e}")
+
+    def _save_stats(self):
+        try:
+            os.makedirs(os.path.dirname(self._stats_path), exist_ok=True)
+            with self._lock:
+                data = {
+                    'today_date':    self._today_str,
+                    'today_traffic': dict(self._daily_traffic),
+                    'daily_history': list(self._daily_history),
+                }
+            with open(self._stats_path, 'w') as f:
+                _json.dump(data, f)
+        except Exception as e:
+            logger.warning(f"Stats save error: {e}")
+
+    # ── Hall of Records ───────────────────────────────────────────────
+
+    def get_hall_of_records(self):
+        """Return 4-category Hall of Records: uptime, today, 7d, 30d data leaders."""
+        now = time.time()
+
+        with self._lock:
+            known         = dict(self._known_devices)
+            today_traffic = dict(self._daily_traffic)
+            history       = list(self._daily_history)
+            current_ips   = {d['ip'] for d in self.devices}
+
+        def _label(ip):
+            d = known.get(ip, {})
+            return d.get('hostname') or d.get('mac') or ip
+
+        def _fmt_bytes(b):
+            b = int(b)
+            if b >= 1_000_000_000: return f"{b/1_000_000_000:.1f} GB"
+            if b >= 1_000_000:     return f"{b/1_000_000:.1f} MB"
+            if b >= 1_000:         return f"{b/1_000:.1f} KB"
+            return f"{b} B"
+
+        def _fmt_dur(s):
+            s = int(s)
+            d = s // 86400
+            h = (s % 86400) // 3600
+            m = (s % 3600) // 60
+            if d: return f"{d}d {h}h"
+            if h: return f"{h}h {m:02d}m"
+            return f"{m}m"
+
+        categories = []
+
+        # ── Longest time up (device currently on network, earliest first_seen) ──
+        uptime_winner, uptime_secs = None, 0.0
+        for ip, dev in known.items():
+            if ip not in current_ips:
+                continue
+            try:
+                fs = time.mktime(time.strptime(dev.get('first_seen', ''), '%Y-%m-%dT%H:%M:%S'))
+                secs = now - fs
+            except Exception:
+                continue
+            if secs > uptime_secs:
+                uptime_secs, uptime_winner = secs, ip
+        if uptime_winner:
+            categories.append({
+                'category': 'longest_up',
+                'title':    'LONGEST TIME UP',
+                'icon':     '⏱',
+                'device':   _label(uptime_winner),
+                'ip':       uptime_winner,
+                'value':    _fmt_dur(uptime_secs),
+                'raw':      int(uptime_secs),
+            })
+
+        # ── Most data today ──────────────────────────────────────────
+        if today_traffic:
+            top = max(today_traffic, key=lambda ip:
+                today_traffic[ip].get('bytes_in', 0) + today_traffic[ip].get('bytes_out', 0))
+            total = today_traffic[top].get('bytes_in', 0) + today_traffic[top].get('bytes_out', 0)
+            if total > 0:
+                categories.append({
+                    'category': 'today',
+                    'title':    'MOST DATA TODAY',
+                    'icon':     '📅',
+                    'device':   _label(top),
+                    'ip':       top,
+                    'value':    _fmt_bytes(total),
+                    'raw':      int(total),
+                })
+
+        # ── Most data — last 7 days ──────────────────────────────────
+        cutoff_7 = time.strftime('%Y-%m-%d', time.localtime(now - 7 * 86400))
+        agg_7: dict = {}
+        for day in history:
+            if day.get('date', '') >= cutoff_7:
+                for ip, t in day.get('traffic', {}).items():
+                    agg_7[ip] = agg_7.get(ip, 0) + t.get('bytes_in', 0) + t.get('bytes_out', 0)
+        for ip, t in today_traffic.items():
+            agg_7[ip] = agg_7.get(ip, 0) + t.get('bytes_in', 0) + t.get('bytes_out', 0)
+        if agg_7:
+            top7 = max(agg_7, key=lambda ip: agg_7[ip])
+            if agg_7[top7] > 0:
+                categories.append({
+                    'category': 'week',
+                    'title':    'MOST DATA — 7 DAYS',
+                    'icon':     '📊',
+                    'device':   _label(top7),
+                    'ip':       top7,
+                    'value':    _fmt_bytes(agg_7[top7]),
+                    'raw':      int(agg_7[top7]),
+                })
+
+        # ── Most data — last 30 days ─────────────────────────────────
+        cutoff_30 = time.strftime('%Y-%m-%d', time.localtime(now - 30 * 86400))
+        agg_30: dict = {}
+        for day in history:
+            if day.get('date', '') >= cutoff_30:
+                for ip, t in day.get('traffic', {}).items():
+                    agg_30[ip] = agg_30.get(ip, 0) + t.get('bytes_in', 0) + t.get('bytes_out', 0)
+        for ip, t in today_traffic.items():
+            agg_30[ip] = agg_30.get(ip, 0) + t.get('bytes_in', 0) + t.get('bytes_out', 0)
+        if agg_30:
+            top30 = max(agg_30, key=lambda ip: agg_30[ip])
+            if agg_30[top30] > 0:
+                categories.append({
+                    'category': 'month',
+                    'title':    'MOST DATA — 30 DAYS',
+                    'icon':     '📈',
+                    'device':   _label(top30),
+                    'ip':       top30,
+                    'value':    _fmt_bytes(agg_30[top30]),
+                    'raw':      int(agg_30[top30]),
+                })
+
+        return categories

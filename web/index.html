@@ -178,7 +178,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 /* ── Hall of Records button + dropdown ───────────────────────── */
 #hof-btn{margin-left:auto}
 #hof-panel{
-  display:none;position:fixed;top:46px;right:0;width:320px;max-height:70vh;
+  display:none;position:fixed;top:46px;right:0;width:300px;max-height:80vh;
   z-index:40;overflow-y:auto;
   background:rgba(5,5,5,.97);border:1px solid rgba(255,255,255,.15);
   border-top:none;pointer-events:all;
@@ -191,17 +191,19 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'Co
 }
 #hof-close{cursor:pointer;font-size:16px;opacity:.5}
 #hof-close:hover{opacity:1}
-#hof-list{padding:4px 0}
-.hof-row{
-  display:flex;justify-content:space-between;align-items:baseline;
-  padding:7px 14px;border-bottom:1px solid rgba(255,255,255,.04);
-  font-size:10px;letter-spacing:1px;
+#hof-list{padding:6px 0}
+.hof-cat{
+  padding:10px 14px 4px;
+  font-size:8px;letter-spacing:3px;opacity:.45;text-transform:uppercase;
+  border-top:1px solid rgba(255,255,255,.06);
 }
-.hof-row:last-child{border-bottom:none}
-.hof-rank{color:rgba(255,255,255,.3);width:22px;flex-shrink:0;font-size:9px}
-.hof-label{flex:1;opacity:.75}
-.hof-value{color:currentColor;font-weight:700;letter-spacing:2px;white-space:nowrap;margin-left:8px}
-.hof-date{font-size:8px;opacity:.3;white-space:nowrap;margin-left:8px}
+.hof-cat:first-child{border-top:none}
+.hof-cat-icon{margin-right:5px}
+.hof-card{padding:6px 14px 10px}
+.hof-card-device{font-size:12px;font-weight:700;letter-spacing:1px;color:#fff;margin-bottom:2px}
+.hof-card-meta{display:flex;justify-content:space-between;align-items:baseline}
+.hof-card-ip{font-size:9px;opacity:.35;letter-spacing:1px}
+.hof-card-value{font-size:13px;font-weight:700;letter-spacing:2px;color:#0f0}
 #hof-empty{padding:20px 14px;text-align:center;opacity:.35;font-size:10px;letter-spacing:2px}
 
 /* ── Device bubble canvas ─────────────────────────────────────── */
@@ -1336,33 +1338,27 @@ el('speedtest-btn').addEventListener('click', async () => {
 // ── Hall of Records ────────────────────────────────────────────────
 const _hofPanel = el('hof-panel');
 
-function _fmtHofDate(iso) {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso);
-    return d.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'2-digit'});
-  } catch { return ''; }
-}
-
 async function _loadHof() {
+  const list = el('hof-list');
   try {
     const r = await fetch('/api/highscores');
     const d = await r.json();
-    const list = el('hof-list');
-    const records = d.records || [];
-    if (!records.length) {
+    const cats = d.categories || [];
+    if (!cats.length) {
       list.innerHTML = '<div id="hof-empty">No records yet — keep monitoring!</div>';
       return;
     }
-    list.innerHTML = records.slice(0, 20).map((rec, i) => `
-      <div class="hof-row">
-        <span class="hof-rank">#${i + 1}</span>
-        <span class="hof-label">${rec.label}</span>
-        <span class="hof-value">${rec.display}</span>
-        <span class="hof-date">${_fmtHofDate(rec.set_at)}</span>
+    list.innerHTML = cats.map(c => `
+      <div class="hof-cat"><span class="hof-cat-icon">${c.icon || '🏆'}</span>${c.title}</div>
+      <div class="hof-card">
+        <div class="hof-card-device">${c.device}</div>
+        <div class="hof-card-meta">
+          <span class="hof-card-ip">${c.ip}</span>
+          <span class="hof-card-value">${c.value}</span>
+        </div>
       </div>`).join('');
   } catch (e) {
-    el('hof-list').innerHTML = '<div id="hof-empty">Unable to load records</div>';
+    list.innerHTML = '<div id="hof-empty">Unable to load records</div>';
   }
 }
 

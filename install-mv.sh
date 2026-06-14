@@ -6,260 +6,276 @@
 
 set -e
 [ -z "$BASH_VERSION" ] && exec /bin/bash "$0" "$@"
+[ "$(id -u)" -ne 0 ] && { echo "Run as root: sudo $0"; exit 1; }
 
-# ── Colours ───────────────────────────────────────────────────────
+# ── Colours ───────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; WHITE='\033[1;37m'; NC='\033[0m'
 
-# ── Config ────────────────────────────────────────────────────────
-RAGNAR_USER="mild-viking"
-RAGNAR_PATH="/home/${RAGNAR_USER}/mild-viking"
+# ── Config ────────────────────────────────────────────────────────────
+MV_USER="mild-viking"
+MV_PATH="/home/${MV_USER}/mild-viking"
 GITHUB_REPO="https://github.com/auggnation/Ragnarbutdifferent"
-GITHUB_RAW="https://raw.githubusercontent.com/auggnation/Ragnarbutdifferent/main"
 BRANCH="main"
 SERVICE_NAME="mild-viking"
 WEB_PORT=8000
-LOG_DIR="/var/log/mild-viking_install"
+LOG_DIR="/var/log/mild-viking"
 LOG_FILE="${LOG_DIR}/install_$(date +%Y%m%d_%H%M%S).log"
-GIT_WORKS=true
 
 mkdir -p "$LOG_DIR"
 
-# ── Helpers ───────────────────────────────────────────────────────
-log()     { local l=$1; shift; echo -e "[$(date '+%H:%M:%S')] [$l] $*" | tee -a "$LOG_FILE"; }
-info()    { echo -e "${BLUE}[INFO]${NC}  $*"; log INFO "$*"; }
-ok()      { echo -e "${GREEN}[OK]${NC}    $*"; log SUCCESS "$*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; log WARNING "$*"; }
-err()     { echo -e "${RED}[ERROR]${NC} $*"; log ERROR "$*"; }
-die()     { err "$*"; exit 1; }
-header()  { echo -e "\n${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; echo -e "${WHITE} $* ${NC}"; echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"; }
+# ── Helpers ───────────────────────────────────────────────────────────
+log()    { echo "[$(date '+%H:%M:%S')] $*" >> "$LOG_FILE"; }
+info()   { echo -e "${BLUE}[INFO]${NC}  $*"; log "INFO  $*"; }
+ok()     { echo -e "${GREEN}[ OK ]${NC}  $*"; log "OK    $*"; }
+warn()   { echo -e "${YELLOW}[WARN]${NC}  $*"; log "WARN  $*"; }
+die()    { echo -e "${RED}[FAIL]${NC}  $*"; log "FAIL  $*"; exit 1; }
+header() { echo -e "\n${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; \
+           echo -e "${WHITE}  $*  ${NC}"; \
+           echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"; }
 
-# Require root
-[ "$(id -u)" -ne 0 ] && die "Run as root: sudo $0"
+# Detect Raspberry Pi / ARM
+IS_ARM=false
+case "$(uname -m 2>/dev/null)" in arm*|aarch64) IS_ARM=true ;; esac
 
-# ── Platform detect ───────────────────────────────────────────────
-PKG_MGR="apt"; UPDATE_CMD="apt-get update -y"; INSTALL_CMD="DEBIAN_FRONTEND=noninteractive apt-get install -y"
-IS_ARM=false; ARCH=$(uname -m 2>/dev/null || echo "unknown")
-case "$ARCH" in arm*|aarch64) IS_ARM=true ;; esac
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    case "${ID:-}" in
-        fedora|rhel|centos|rocky|almalinux)
-            PKG_MGR="dnf"; UPDATE_CMD="dnf makecache -y"; INSTALL_CMD="dnf install -y" ;;
-        arch|manjaro)
-            PKG_MGR="pacman"; UPDATE_CMD="pacman -Sy --noconfirm"; INSTALL_CMD="pacman -S --noconfirm" ;;
-    esac
-fi
-
-check_git() {
-    git --version >/dev/null 2>&1 && GIT_WORKS=true || { GIT_WORKS=false; warn "git unavailable — will use wget tarball"; }
-}
-
-clone_or_download() {
-    local url=$1 target=${2:-$(basename "${1%.git}")} branch=${3:-main}
-    if [ "$GIT_WORKS" = true ]; then
-        git clone --depth 1 --branch "$branch" "$url" "$target" 2>/dev/null && return 0
-        warn "git clone failed, trying tarball..."
-    fi
-    local path="${url#https://github.com/}"; path="${path%.git}"
-    local tarball="https://github.com/${path}/archive/refs/heads/${branch}.tar.gz"
-    local tmp; tmp=$(mktemp /tmp/ragnar-XXXXXX.tar.gz)
-    if wget -q --timeout=60 -O "$tmp" "$tarball" 2>/dev/null || \
-       curl -fsSL --connect-timeout 30 -o "$tmp" "$tarball" 2>/dev/null; then
-        mkdir -p "$target"
-        tar xzf "$tmp" -C "$target" --strip-components=1
-        rm -f "$tmp"
-        return 0
-    fi
-    rm -f "$tmp"; return 1
-}
-
-# ── Welcome banner ────────────────────────────────────────────────
+# ── Banner ────────────────────────────────────────────────────────────
 clear
 echo -e "${CYAN}"
-cat << 'EOF'
+cat << 'BANNER'
  ███╗   ███╗██╗██╗      ██████╗       ██╗   ██╗██╗██╗  ██╗██╗███╗   ██╗ ██████╗
  ████╗ ████║██║██║      ██╔══██╗      ██║   ██║██║██║ ██╔╝██║████╗  ██║██╔════╝
  ██╔████╔██║██║██║      ██║  ██║█████╗██║   ██║██║█████╔╝ ██║██╔██╗ ██║██║  ███╗
  ██║╚██╔╝██║██║██║      ██║  ██║╚════╝╚██╗ ██╔╝██║██╔═██╗ ██║██║╚██╗██║██║   ██║
  ██║ ╚═╝ ██║██║███████╗ ██████╔╝       ╚████╔╝ ██║██║  ██╗██║██║ ╚████║╚██████╔╝
  ╚═╝     ╚═╝╚═╝╚══════╝ ╚═════╝         ╚═══╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝
-                      NETWORK MONITOR  //  auggnation
-EOF
+                    NETWORK MONITOR  //  auggnation
+BANNER
 echo -e "${NC}"
-echo -e "${WHITE}Platform:${NC} $(uname -m) / $(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME}" || echo "Linux")"
-echo -e "${WHITE}Install path:${NC} ${RAGNAR_PATH}"
-echo -e "${WHITE}Web interface:${NC} http://<IP>:${WEB_PORT}"
+echo -e "${WHITE}Platform:${NC}    $(uname -m) / $(. /etc/os-release 2>/dev/null && echo "${PRETTY_NAME}" || echo "Linux")"
+echo -e "${WHITE}Install path:${NC} ${MV_PATH}"
+echo -e "${WHITE}Web interface:${NC} http://<your-pi-ip>:${WEB_PORT}"
+echo -e "${WHITE}Log file:${NC}     ${LOG_FILE}"
 echo
 
-# ═══════════════════════════════════════════════════════════════════
-header "STEP 1 / 7  System packages"
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+header "STEP 1 / 6  System packages"
+# ═══════════════════════════════════════════════════════════════════════
 
 info "Updating package lists..."
-$UPDATE_CMD 2>&1 | tee -a "$LOG_FILE" || warn "Package update had warnings (continuing)"
-
-# Install git first so the clone step works even if the main install partially fails
-info "Installing git..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y git 2>&1 | tee -a "$LOG_FILE" || warn "git install failed — will use wget tarball fallback"
+DEBIAN_FRONTEND=noninteractive apt-get update -y >> "$LOG_FILE" 2>&1 \
+    || warn "Package update had warnings (continuing)"
 
 SYSTEM_PKGS=(
+    # Python runtime
     python3 python3-pip python3-venv python3-dev
+
+    # Download / version control
     git wget curl
+
+    # Network tools (WiFi management, AP mode, device scanning)
     network-manager iproute2 net-tools iputils-ping
     arp-scan nmap
+
+    # AP mode (hotspot when no WiFi is configured)
+    hostapd dnsmasq
+
+    # Pillow image library build dependencies (e-paper display)
     libjpeg-dev zlib1g-dev libfreetype6-dev liblcms2-dev
-    libopenjp2-7 libtiff-dev libffi-dev libssl-dev
-    build-essential
+    libopenjp2-7 libtiff-dev
+
+    # Cryptography build dependencies
+    libffi-dev libssl-dev build-essential
 )
 
-# ARM/Pi-specific packages
+# Raspberry Pi hardware packages
 if [ "$IS_ARM" = true ]; then
     SYSTEM_PKGS+=(python3-rpi.gpio python3-spidev raspi-config)
 fi
 
-warn "Installing system packages — this can take 5-10 minutes on a fresh Pi, please wait..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y "${SYSTEM_PKGS[@]}" 2>&1 | tee -a "$LOG_FILE" || warn "Some packages may not have installed (continuing)"
+warn "Installing system packages — may take 5-10 min on a fresh Pi..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y "${SYSTEM_PKGS[@]}" >> "$LOG_FILE" 2>&1 \
+    || warn "Some packages may not have installed — check $LOG_FILE"
 
-# AP-mode packages (optional, non-blocking)
-info "Installing AP-mode packages (optional — may take 1-2 min)..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y hostapd dnsmasq 2>&1 | tee -a "$LOG_FILE" || warn "hostapd/dnsmasq not installed — AP mode unavailable"
-ok "System packages installed"
+ok "System packages done"
 
-# ═══════════════════════════════════════════════════════════════════
-header "STEP 2 / 7  Create user and install directory"
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+header "STEP 2 / 6  User and install directory"
+# ═══════════════════════════════════════════════════════════════════════
 
-if ! id "$RAGNAR_USER" &>/dev/null; then
-    useradd -m -s /bin/bash "$RAGNAR_USER"
-    ok "Created user: $RAGNAR_USER"
+if ! id "$MV_USER" &>/dev/null; then
+    useradd -m -s /bin/bash "$MV_USER"
+    ok "Created user: $MV_USER"
 else
-    info "User $RAGNAR_USER already exists"
+    info "User $MV_USER already exists"
 fi
 
-# Add to required groups
-usermod -aG sudo,netdev,dialout "$RAGNAR_USER" 2>/dev/null || true
-[ "$IS_ARM" = true ] && usermod -aG gpio,spi,i2c "$RAGNAR_USER" 2>/dev/null || true
+# Group membership
+usermod -aG sudo,netdev,dialout "$MV_USER" 2>/dev/null || true
+[ "$IS_ARM" = true ] && usermod -aG gpio,spi,i2c "$MV_USER" 2>/dev/null || true
 
-# Backup existing install if present
-if [ -d "$RAGNAR_PATH" ] && [ -f "$RAGNAR_PATH/mildviking.py" ]; then
-    BACKUP="${RAGNAR_PATH}_backup_$(date +%Y%m%d_%H%M%S)"
-    info "Backing up existing installation to $BACKUP"
-    # Preserve config and data
-    if [ -f "$RAGNAR_PATH/config/shared_config.json" ]; then
-        cp -f "$RAGNAR_PATH/config/shared_config.json" /tmp/mild-viking_config_backup.json 2>/dev/null || true
-    fi
-    mv "$RAGNAR_PATH" "$BACKUP" || true
+# Back up any existing install but preserve config/data
+if [ -d "$MV_PATH" ] && [ -f "$MV_PATH/mildviking.py" ]; then
+    BACKUP="${MV_PATH}_backup_$(date +%Y%m%d_%H%M%S)"
+    info "Backing up existing install to $BACKUP"
+    [ -f "$MV_PATH/data/config.json" ] && \
+        cp "$MV_PATH/data/config.json" /tmp/mv_config_backup.json 2>/dev/null || true
+    mv "$MV_PATH" "$BACKUP" || true
 fi
 
-mkdir -p "$RAGNAR_PATH"
-ok "Install directory ready: $RAGNAR_PATH"
+mkdir -p "$MV_PATH"
+ok "Install directory: $MV_PATH"
 
-# ═══════════════════════════════════════════════════════════════════
-header "STEP 3 / 7  Download Mild-Viking"
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+header "STEP 3 / 6  Download Mild-Viking"
+# ═══════════════════════════════════════════════════════════════════════
 
-check_git
-cd /tmp
+info "Cloning from ${GITHUB_REPO}..."
+TEMP_SRC="/tmp/mild-viking_src_$$"
 
-TEMP_CLONE="/tmp/mild-viking_src_$$"
-info "Downloading from ${GITHUB_REPO}..."
-if ! clone_or_download "$GITHUB_REPO" "$TEMP_CLONE" "$BRANCH"; then
-    die "Failed to download Mild-Viking. Check your internet connection."
+if git --version >/dev/null 2>&1; then
+    git clone --depth 1 --branch "$BRANCH" "$GITHUB_REPO" "$TEMP_SRC" >> "$LOG_FILE" 2>&1 \
+    || {
+        warn "git clone failed, trying tarball..."
+        TARBALL="${GITHUB_REPO}/archive/refs/heads/${BRANCH}.tar.gz"
+        TMP_TGZ=$(mktemp /tmp/mv-XXXXXX.tar.gz)
+        wget -q --timeout=60 -O "$TMP_TGZ" "$TARBALL" >> "$LOG_FILE" 2>&1 \
+            || curl -fsSL --connect-timeout 30 -o "$TMP_TGZ" "$TARBALL" >> "$LOG_FILE" 2>&1 \
+            || die "Could not download Mild-Viking. Check your internet connection."
+        mkdir -p "$TEMP_SRC"
+        tar xzf "$TMP_TGZ" -C "$TEMP_SRC" --strip-components=1
+        rm -f "$TMP_TGZ"
+    }
+else
+    warn "git not found, using tarball..."
+    TARBALL="${GITHUB_REPO}/archive/refs/heads/${BRANCH}.tar.gz"
+    TMP_TGZ=$(mktemp /tmp/mv-XXXXXX.tar.gz)
+    wget -q --timeout=60 -O "$TMP_TGZ" "$TARBALL" >> "$LOG_FILE" 2>&1 \
+        || curl -fsSL --connect-timeout 30 -o "$TMP_TGZ" "$TARBALL" >> "$LOG_FILE" 2>&1 \
+        || die "Could not download Mild-Viking. Check your internet connection."
+    mkdir -p "$TEMP_SRC"
+    tar xzf "$TMP_TGZ" -C "$TEMP_SRC" --strip-components=1
+    rm -f "$TMP_TGZ"
 fi
 
-info "Copying files to $RAGNAR_PATH..."
-rsync -a --exclude='.git' "${TEMP_CLONE}/" "${RAGNAR_PATH}/" 2>/dev/null || \
-    cp -r "${TEMP_CLONE}/." "${RAGNAR_PATH}/"
-rm -rf "$TEMP_CLONE"
+rsync -a --exclude='.git' "${TEMP_SRC}/" "${MV_PATH}/" 2>/dev/null \
+    || cp -r "${TEMP_SRC}/." "${MV_PATH}/"
+rm -rf "$TEMP_SRC"
 
-# Restore config if backed up
-if [ -f /tmp/mild-viking_config_backup.json ]; then
-    mkdir -p "$RAGNAR_PATH/config"
-    cp -f /tmp/mild-viking_config_backup.json "$RAGNAR_PATH/config/shared_config.json"
-    info "Restored previous configuration"
+# Restore saved config
+if [ -f /tmp/mv_config_backup.json ]; then
+    mkdir -p "${MV_PATH}/data"
+    cp /tmp/mv_config_backup.json "${MV_PATH}/data/config.json"
+    ok "Restored previous configuration"
 fi
 
-chown -R "${RAGNAR_USER}:${RAGNAR_USER}" "$RAGNAR_PATH"
-ok "Mild-Viking downloaded and installed"
+chown -R "${MV_USER}:${MV_USER}" "$MV_PATH"
+ok "Mild-Viking downloaded"
 
-# ═══════════════════════════════════════════════════════════════════
-header "STEP 4 / 7  Python virtual environment and dependencies"
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+header "STEP 4 / 6  Python virtual environment"
+# ═══════════════════════════════════════════════════════════════════════
 
-VENV_PATH="${RAGNAR_PATH}/venv"
-
+VENV="${MV_PATH}/venv"
 info "Creating Python virtual environment..."
-python3 -m venv --system-site-packages "$VENV_PATH" >> "$LOG_FILE" 2>&1
-ok "Virtual environment created: $VENV_PATH"
+python3 -m venv --system-site-packages "$VENV" >> "$LOG_FILE" 2>&1
+ok "Virtual environment: $VENV"
 
-info "Installing Python packages..."
-"${VENV_PATH}/bin/pip" install --upgrade pip setuptools wheel >> "$LOG_FILE" 2>&1
+info "Upgrading pip..."
+"${VENV}/bin/pip" install --upgrade pip setuptools wheel >> "$LOG_FILE" 2>&1
 
-PYTHON_PKGS=(
-    "flask>=3.0.0"
-    "flask-socketio>=5.3.0"
-    "flask-cors>=4.0.0"
-    "psutil>=5.9.0"
-    "Pillow>=10.0.0"
-    "requests>=2.31.0"
-    "python-dotenv>=1.0.0"
-    "bcrypt>=4.0.0"
-    "cryptography>=41.0.0"
-    "netifaces>=0.11.0"
-    "speedtest-cli>=2.1.3"
-)
+info "Installing Python dependencies from requirements.txt..."
+"${VENV}/bin/pip" install -r "${MV_PATH}/requirements.txt" >> "$LOG_FILE" 2>&1 \
+    || warn "Some Python packages failed — check $LOG_FILE"
 
-for pkg in "${PYTHON_PKGS[@]}"; do
-    info "  Installing $pkg..."
-    "${VENV_PATH}/bin/pip" install "$pkg" >> "$LOG_FILE" 2>&1 || warn "  $pkg install had warnings"
-done
-
-# ARM/Pi specific
+# ARM-only packages that can't always be listed in requirements.txt
 if [ "$IS_ARM" = true ]; then
-    for pkg in RPi.GPIO spidev luma.led_matrix; do
-        info "  Installing $pkg (ARM)..."
-        "${VENV_PATH}/bin/pip" install "$pkg" >> "$LOG_FILE" 2>&1 || warn "  $pkg not available (may not matter)"
+    for pkg in RPi.GPIO spidev smbus2; do
+        "${VENV}/bin/pip" install "$pkg" >> "$LOG_FILE" 2>&1 \
+            || warn "$pkg not available (may not matter if not using GPIO/SPI)"
     done
 fi
 
-chown -R "${RAGNAR_USER}:${RAGNAR_USER}" "$VENV_PATH"
-ok "Python packages installed"
+chown -R "${MV_USER}:${MV_USER}" "$VENV"
+ok "Python dependencies installed"
 
-# ═══════════════════════════════════════════════════════════════════
-header "STEP 5 / 7  Network management"
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+header "STEP 5 / 6  System configuration"
+# ═══════════════════════════════════════════════════════════════════════
 
-# Ensure NetworkManager is running (used for WiFi scanning/connect via web UI)
+# ── NetworkManager ────────────────────────────────────────────────────
 systemctl enable NetworkManager 2>/dev/null || true
 systemctl start  NetworkManager 2>/dev/null || true
 ok "NetworkManager enabled"
 
-# Allow the service account to manage WiFi without a password prompt
-SUDOERS_FILE="/etc/sudoers.d/mild-viking-wifi"
+# ── sudoers ───────────────────────────────────────────────────────────
+SUDOERS_FILE="/etc/sudoers.d/mild-viking"
 cat > "$SUDOERS_FILE" << 'SUDOEOF'
-# Mild-Viking: allow WiFi management and time sync without password
-mild-viking ALL=(ALL) NOPASSWD: /usr/bin/nmcli, /usr/sbin/nmcli
-mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/wpa_cli, /usr/bin/wpa_cli
-mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/wpa_passphrase, /usr/bin/wpa_passphrase
-mild-viking ALL=(ALL) NOPASSWD: /usr/bin/raspi-config
-mild-viking ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/wpa_supplicant/wpa_supplicant.conf
-mild-viking ALL=(ALL) NOPASSWD: /usr/bin/cat /etc/wpa_supplicant/wpa_supplicant.conf
-mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/iwlist, /usr/bin/iwlist
-mild-viking ALL=(ALL) NOPASSWD: /sbin/dhclient, /usr/sbin/dhclient
-mild-viking ALL=(ALL) NOPASSWD: /usr/bin/timedatectl, /usr/sbin/timedatectl
+# Mild-Viking — allow network management without password prompts
+
+# WiFi management via NetworkManager
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/nmcli
+mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/nmcli
+
+# AP mode — interface configuration
+mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/ip
+mild-viking ALL=(ALL) NOPASSWD: /sbin/ip
+
+# AP mode — start/stop hostapd and dnsmasq
+mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/hostapd
+mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/dnsmasq
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/pkill
+mild-viking ALL=(ALL) NOPASSWD: /bin/pkill
+
+# AP mode — stop system dnsmasq that may conflict
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop dnsmasq
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/systemctl start dnsmasq
+mild-viking ALL=(ALL) NOPASSWD: /bin/systemctl stop dnsmasq
+
+# Device scanning
+mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/arp-scan
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/arp-scan
+
+# Time management
+mild-viking ALL=(ALL) NOPASSWD: /usr/bin/timedatectl
+mild-viking ALL=(ALL) NOPASSWD: /usr/sbin/timedatectl
 mild-viking ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart systemd-timesyncd
-mild-viking ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart dhcpcd
 SUDOEOF
+
 chmod 440 "$SUDOERS_FILE"
-visudo -c -f "$SUDOERS_FILE" 2>/dev/null && ok "sudoers rules installed for WiFi management" \
-    || { warn "sudoers syntax check failed — removing"; rm -f "$SUDOERS_FILE"; }
+visudo -c -f "$SUDOERS_FILE" >> "$LOG_FILE" 2>&1 \
+    && ok "sudoers rules installed" \
+    || { warn "sudoers syntax error — removing"; rm -f "$SUDOERS_FILE"; }
 
-# ═══════════════════════════════════════════════════════════════════
-header "STEP 6 / 7  Systemd service"
-# ═══════════════════════════════════════════════════════════════════
+# ── Capabilities (run arp-scan and nmap without root) ─────────────────
+ARP_SCAN=$(command -v arp-scan 2>/dev/null || true)
+[ -n "$ARP_SCAN" ] && \
+    setcap cap_net_raw+ep "$ARP_SCAN" 2>/dev/null && ok "arp-scan: raw socket capability set"
 
-# Write service unit
+NMAP_BIN=$(command -v nmap 2>/dev/null || true)
+[ -n "$NMAP_BIN" ] && \
+    setcap cap_net_raw,cap_net_admin+eip "$NMAP_BIN" 2>/dev/null && ok "nmap: raw socket capability set"
+
+# ── Pi-specific: enable SPI and I2C for e-paper display ───────────────
+if [ "$IS_ARM" = true ] && command -v raspi-config &>/dev/null; then
+    raspi-config nonint do_spi 0 2>/dev/null || true
+    raspi-config nonint do_i2c 0 2>/dev/null || true
+    ok "SPI and I2C interfaces enabled"
+fi
+
+# ── Data directories ──────────────────────────────────────────────────
+for dir in data data/logs web; do
+    mkdir -p "${MV_PATH}/${dir}"
+done
+chown -R "${MV_USER}:${MV_USER}" "$MV_PATH"
+
+# ── Open web port ─────────────────────────────────────────────────────
+command -v ufw &>/dev/null && ufw allow "${WEB_PORT}/tcp" >> "$LOG_FILE" 2>&1 && \
+    info "UFW: opened port $WEB_PORT"
+
+# ═══════════════════════════════════════════════════════════════════════
+header "STEP 6 / 6  Systemd service"
+# ═══════════════════════════════════════════════════════════════════════
+
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
 Description=Mild-Viking Network Monitor
@@ -268,18 +284,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=${RAGNAR_USER}
-WorkingDirectory=${RAGNAR_PATH}
-ExecStart=${VENV_PATH}/bin/python3 ${RAGNAR_PATH}/mildviking.py
+User=${MV_USER}
+WorkingDirectory=${MV_PATH}
+ExecStart=${VENV}/bin/python3 ${MV_PATH}/mildviking.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=mild-viking
 Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONPATH=${RAGNAR_PATH}
-
-# Allow network operations
+Environment=PYTHONPATH=${MV_PATH}
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 
@@ -287,90 +301,38 @@ CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 WantedBy=multi-user.target
 EOF
 
-# Create env file template if missing
-if [ ! -f "${RAGNAR_PATH}/.env" ]; then
-    cat > "${RAGNAR_PATH}/.env" << 'ENVEOF'
-# Mild-Viking Network Monitor — environment config
-# No secrets required for basic operation
-MILD_VIKING_DEBUG=false
-ENVEOF
-    chown "${RAGNAR_USER}:${RAGNAR_USER}" "${RAGNAR_PATH}/.env"
-fi
-
-# Allow arp-scan to run without root (setuid or capability)
-ARP_SCAN_BIN=$(which arp-scan 2>/dev/null || true)
-if [ -n "$ARP_SCAN_BIN" ]; then
-    setcap cap_net_raw+ep "$ARP_SCAN_BIN" 2>/dev/null || \
-        chmod u+s "$ARP_SCAN_BIN" 2>/dev/null || \
-        warn "Could not setcap arp-scan — device scan may need root"
-fi
-
-# Set up nmap to work without root
-NMAP_BIN=$(which nmap 2>/dev/null || true)
-if [ -n "$NMAP_BIN" ]; then
-    setcap cap_net_raw,cap_net_admin+eip "$NMAP_BIN" 2>/dev/null || true
-fi
-
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}.service"
-ok "Systemd service installed: ${SERVICE_NAME}.service"
 
-# ═══════════════════════════════════════════════════════════════════
-header "STEP 7 / 7  Firewall and final setup"
-# ═══════════════════════════════════════════════════════════════════
+info "Starting Mild-Viking..."
+systemctl start "${SERVICE_NAME}.service" \
+    && ok "Service started" \
+    || warn "Service failed to start — check: sudo journalctl -u ${SERVICE_NAME} -n 50"
 
-# Open port 8000
-if command -v ufw &>/dev/null; then
-    ufw allow "${WEB_PORT}/tcp" >> "$LOG_FILE" 2>&1 && info "UFW: opened port $WEB_PORT" || true
-fi
-if command -v iptables &>/dev/null; then
-    iptables -C INPUT -p tcp --dport "$WEB_PORT" -j ACCEPT 2>/dev/null || \
-        iptables -A INPUT -p tcp --dport "$WEB_PORT" -j ACCEPT 2>/dev/null || true
-fi
-
-# Ensure data directories exist
-for dir in config data data/logs data/networks web; do
-    mkdir -p "${RAGNAR_PATH}/${dir}"
-done
-chown -R "${RAGNAR_USER}:${RAGNAR_USER}" "$RAGNAR_PATH"
-
-# Pi-specific: enable SPI and I2C for e-paper display
-if [ "$IS_ARM" = true ] && command -v raspi-config &>/dev/null; then
-    raspi-config nonint do_spi 0    2>/dev/null || true
-    raspi-config nonint do_i2c 0   2>/dev/null || true
-    info "Enabled SPI and I2C interfaces"
-fi
-
-# Start the service
-info "Starting Mild-Viking service..."
-systemctl start "${SERVICE_NAME}.service" || warn "Service start failed — check: journalctl -u ${SERVICE_NAME}"
-
-ok "Mild-Viking service started"
-
-# ═══════════════════════════════════════════════════════════════════
-# Summary
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+# Done
+# ═══════════════════════════════════════════════════════════════════════
 
 IP_ADDR=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "your-pi-ip")
 
 echo
 echo -e "${GREEN}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║         MILD-VIKING INSTALLATION COMPLETE             ║${NC}"
+echo -e "${GREEN}║       MILD-VIKING INSTALLATION COMPLETE          ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════╝${NC}"
 echo
-echo -e "${WHITE}Web dashboard:${NC}  http://${IP_ADDR}:${WEB_PORT}"
-echo -e "${WHITE}Service status:${NC} sudo systemctl status mild-viking"
-echo -e "${WHITE}View logs:${NC}      sudo journalctl -u mild-viking -f"
+echo -e "${WHITE}Dashboard:${NC}      http://${IP_ADDR}:${WEB_PORT}"
+echo -e "${WHITE}Settings:${NC}       http://${IP_ADDR}:${WEB_PORT}/settings"
+echo -e "${WHITE}Status:${NC}         sudo systemctl status mild-viking"
+echo -e "${WHITE}Logs:${NC}           sudo journalctl -u mild-viking -f"
 echo -e "${WHITE}Restart:${NC}        sudo systemctl restart mild-viking"
 echo -e "${WHITE}Install log:${NC}    ${LOG_FILE}"
 echo
-echo -e "${CYAN}The dashboard will be available at http://${IP_ADDR}:${WEB_PORT}${NC}"
-echo -e "${CYAN}Open this URL in a browser on any device on the same network.${NC}"
+echo -e "${CYAN}If no WiFi is configured the Pi will broadcast a setup hotspot.${NC}"
+echo -e "${CYAN}Connect to it and open http://192.168.1.2:8000/settings to configure WiFi.${NC}"
 echo
 
-# Prompt for reboot on Raspberry Pi
 if [ "$IS_ARM" = true ]; then
-    echo -e "${YELLOW}A reboot is recommended on Raspberry Pi to activate all settings.${NC}"
+    echo -e "${YELLOW}A reboot is recommended to activate SPI/I2C for the e-paper display.${NC}"
     read -rp "Reboot now? [y/N] " REBOOT_CHOICE
     [[ "${REBOOT_CHOICE,,}" == "y" ]] && reboot
 fi

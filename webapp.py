@@ -538,18 +538,14 @@ def api_devices_all():
 
 @app.route('/api/highscores')
 def api_highscores():
-    """Return the persisted Hall of Records, sorted by value desc, top 20."""
-    import json as _json
-    hs_path = os.path.join(BASE_DIR, 'data', 'highscores.json')
-    try:
-        if os.path.exists(hs_path):
-            with open(hs_path, 'r') as f:
-                raw = _json.load(f)
-            records = sorted(raw.values(), key=lambda r: r.get('value', 0), reverse=True)
-            return jsonify({'records': records[:20]})
-    except Exception as e:
-        logger.warning(f"Highscores read error: {e}")
-    return jsonify({'records': []})
+    """Return Hall of Records — 4 categories computed live by the traffic monitor."""
+    mon = _monitor()
+    if mon and hasattr(mon, 'get_hall_of_records'):
+        try:
+            return jsonify({'categories': mon.get_hall_of_records()})
+        except Exception as e:
+            logger.warning(f"Hall of Records error: {e}")
+    return jsonify({'categories': []})
 
 
 @app.route('/api/firewall/test', methods=['POST'])
