@@ -4,6 +4,12 @@ A fun, lightweight Raspberry Pi network traffic monitor with a 2.13" e-paper dis
 
 Originally forked from [Ragnar](https://github.com/PierreGode/Ragnar) (which descended from [Bjorn](https://github.com/infinition/Bjorn)). **All offensive security, scanning, and attack tooling has been completely removed.** Mild-Viking is a passive observer that lives safely on your home network.
 
+> **Your Viking, your name.** Give your device a custom name — it shows up on the e-paper display, the web dashboard title, and all reports.
+
+> **Built-in speed tests.** Run internet speed tests on a schedule or on demand. Download, upload, and ping results appear on the e-paper display and the live dashboard.
+
+> **Router integration.** Connect to an **OPNsense** or **pfSense** firewall via API to pull real hostnames from your DHCP leases — so devices show up by name instead of just MAC addresses.
+
 ---
 
 ## Screenshots
@@ -11,19 +17,19 @@ Originally forked from [Ragnar](https://github.com/PierreGode/Ragnar) (which des
 ### Web Dashboard
 
 <p align="center">
-  <img src="resources/MIlD Viking (1).png" alt="Mild-Viking dashboard — device bubbles and radar sweep" width="700">
+  <img src="resources/mild-viking-1.png" alt="Mild-Viking dashboard — device bubbles and radar sweep" width="700">
 </p>
 
 <p align="center">
-  <img src="resources/MIlD Viking (5).png" alt="Mild-Viking dashboard — Hall of Records and stats" width="700">
+  <img src="resources/mild-viking-5.png" alt="Mild-Viking dashboard — Hall of Records and stats" width="700">
 </p>
 
 ### E-Paper Display
 
 <p align="center">
-  <img src="resources/MIlD Viking (2).png" alt="E-paper display — main screen" width="320">
-  <img src="resources/MIlD Viking (3).png" alt="E-paper display — device list" width="320">
-  <img src="resources/MIlD Viking (4).png" alt="E-paper display — speed test" width="320">
+  <img src="resources/mild-viking-2.png" alt="E-paper display — main screen" width="320">
+  <img src="resources/mild-viking-3.png" alt="E-paper display — device list" width="320">
+  <img src="resources/mild-viking-4.png" alt="E-paper display — speed test" width="320">
 </p>
 
 ---
