@@ -92,7 +92,8 @@ class TrafficMonitor:
         self.devices = []
         self.device_count = 0
         self.subnet = ""
-        self.vlan_subnets = []
+        self.vlan_subnets = []   # raw CIDR strings
+        self.vlan_labels  = []   # display labels (e.g. "VLAN 10 — IoT  192.168.10.0/24")
 
         # Persistent device registry: ip → {ip, mac, hostname, first_seen, last_seen}
         self._known_devices = {}
@@ -478,10 +479,22 @@ class TrafficMonitor:
 
         subnets = self._discover_subnets() if not subnet else [subnet]
         # Merge manually configured subnets from settings
+        # Entries may be plain strings (old format) or {vlan, name, subnet} objects
         cfg = getattr(self.shared_data, 'config', {}) if self.shared_data else {}
-        for extra in cfg.get('manual_vlans', []):
-            if extra not in subnets:
+        subnet_labels: dict = {}  # subnet → display label
+        for entry in cfg.get('manual_vlans', []):
+            if isinstance(entry, str):
+                extra, label = entry, entry
+            else:
+                extra = entry.get('subnet', '')
+                parts = []
+                if entry.get('vlan'):  parts.append(f"VLAN {entry['vlan']}")
+                if entry.get('name'):  parts.append(entry['name'])
+                label = ('  —  '.join(parts) + '  ' if parts else '') + extra
+            if extra and extra not in subnets:
                 subnets.append(extra)
+            if extra:
+                subnet_labels[extra] = label
         all_devices = []
 
         for sn in subnets:
@@ -535,6 +548,7 @@ class TrafficMonitor:
             self.devices = all_devices[:100]
             self.device_count = len(all_devices)
             self.vlan_subnets = subnets
+            self.vlan_labels  = [subnet_labels.get(s, s) for s in subnets]
             self._last_scan_time = time.time()
 
         logger.info(f"Scan found {len(all_devices)} devices on {subnets}")
@@ -900,6 +914,7 @@ class TrafficMonitor:
                 'device_count': self.device_count,
                 'subnet': self.subnet,
                 'vlan_subnets': list(self.vlan_subnets),
+                'vlan_labels':  list(self.vlan_labels),
                 'devices': self._enrich_devices(self.devices[:50]),
                 'speedtest_dl': self.speedtest_dl,
                 'speedtest_ul': self.speedtest_ul,
@@ -994,7 +1009,7 @@ class TrafficMonitor:
     # ── Hall of Records ───────────────────────────────────────────────
 
     def get_hall_of_records(self):
-        """Return 4-category Hall of Records: uptime, today, 7d, 30d data leaders."""
+        """Return Hall of Records: device stats, data leaders, speed test leaderboards."""
         now = time.time()
 
         with self._lock:
@@ -1002,6 +1017,9 @@ class TrafficMonitor:
             today_traffic = dict(self._daily_traffic)
             history       = list(self._daily_history)
             current_ips   = {d['ip'] for d in self.devices}
+            subnets       = list(self.vlan_subnets)
+            labels        = list(self.vlan_labels)
+            current_devs  = list(self.devices)
 
         def _label(ip):
             d = known.get(ip, {})
@@ -1108,6 +1126,30 @@ class TrafficMonitor:
                     'raw':      int(agg_30[top30]),
                 })
 
+        # ── Device counts ─────────────────────────────────────────────
+        import ipaddress as _ip
+        total_ever = len(known)
+        categories.append({
+            'category': 'total_devices',
+            'title':    'TOTAL DEVICES SEEN',
+            'icon':     '🖥',
+            'device':   f"{total_ever} unique devices",
+            'ip':       f"{len(current_ips)} online now",
+            'value':    str(total_ever),
+            'raw':      total_ever,
+        })
+
+        # Devices per subnet (current scan)
+        subnet_info = []
+        for sn, lbl in zip(subnets, labels):
+            try:
+                net = _ip.IPv4Network(sn, strict=False)
+                count = sum(1 for d in current_devs
+                            if _ip.IPv4Address(d['ip']) in net)
+            except Exception:
+                count = 0
+            subnet_info.append({'subnet': sn, 'label': lbl, 'count': count})
+
         # ── Speed test leaderboards ──────────────────────────────────
         with self._lock:
             st_history = list(self._speedtest_history)
@@ -1132,7 +1174,8 @@ class TrafficMonitor:
         ]
 
         return {
-            'categories':  categories,
-            'top_dl':      speed_rows_dl,
-            'top_ul':      speed_rows_ul,
+            'categories':    categories,
+            'subnet_counts': subnet_info,
+            'top_dl':        speed_rows_dl,
+            'top_ul':        speed_rows_ul,
         }

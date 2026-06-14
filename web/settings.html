@@ -188,13 +188,23 @@ html,body{background:#050510;color:#fff;font-family:'Courier New',monospace;min-
       <div id="vlan-list" class="net-list">
         <div class="net-item" style="opacity:.4">Loading…</div>
       </div>
-      <div class="field" style="margin-top:10px">
-        <label>Add subnet (CIDR)</label>
-        <input type="text" id="vlan-input" placeholder="e.g. 192.168.10.0/24">
-        <div class="field-note">Added to auto-detected subnets — re-scan after adding</div>
+      <div style="display:grid;grid-template-columns:80px 1fr 1fr;gap:8px;margin-top:10px;align-items:end">
+        <div class="field" style="margin:0">
+          <label>VLAN #</label>
+          <input type="number" id="vlan-num" min="1" max="4094" placeholder="10" style="width:100%">
+        </div>
+        <div class="field" style="margin:0">
+          <label>Name <span style="opacity:.4">(optional)</span></label>
+          <input type="text" id="vlan-name" placeholder="e.g. IoT" style="width:100%">
+        </div>
+        <div class="field" style="margin:0">
+          <label>Subnet (CIDR) <span style="opacity:.4">*required</span></label>
+          <input type="text" id="vlan-input" placeholder="192.168.10.0/24" style="width:100%">
+        </div>
       </div>
-      <div class="btn-row">
-        <button class="btn primary" onclick="addVlan()">Add Subnet</button>
+      <div class="field-note" style="margin-top:4px">Added to auto-detected subnets — re-scan after adding</div>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn primary" onclick="addVlan()">Add</button>
         <span class="msg" id="vlan-msg"></span>
       </div>
     </div>
@@ -598,6 +608,20 @@ async function sendReportNow(btn) {
 }
 
 // ── VLAN / SUBNETS ────────────────────────────────────────────────
+
+function _vlanLabel(v) {
+  if (typeof v === 'string') return v;
+  let label = '';
+  if (v.vlan)  label += `VLAN ${v.vlan}`;
+  if (v.name)  label += (label ? ' — ' : '') + v.name;
+  if (v.subnet) label += (label ? '  ' : '') + v.subnet;
+  return label || JSON.stringify(v);
+}
+
+function _vlanSubnet(v) {
+  return typeof v === 'string' ? v : (v.subnet || '');
+}
+
 async function loadVlans() {
   try {
     const d = await api('/api/config');
@@ -607,25 +631,30 @@ async function loadVlans() {
       box.innerHTML = '<div class="net-item" style="opacity:.4">No manual subnets — using auto-detection only</div>';
       return;
     }
-    box.innerHTML = vlans.map(v =>
+    box.innerHTML = vlans.map((v, i) =>
       `<div class="net-item">
-        <span>${escHtml(v)}</span>
-        <span class="net-remove" onclick="removeVlan('${escJs(v)}')">✕</span>
+        <span>${escHtml(_vlanLabel(v))}</span>
+        <span class="net-remove" onclick="removeVlan(${i})">✕</span>
       </div>`
     ).join('');
   } catch(e) {}
 }
 
 async function addVlan() {
-  const val = document.getElementById('vlan-input').value.trim();
-  if (!val) { msg('vlan-msg', '✗ Enter a subnet', 'err'); return; }
-  if (!/^\d+\.\d+\.\d+\.\d+\/\d+$/.test(val)) {
+  const subnet = document.getElementById('vlan-input').value.trim();
+  const vlanNum = document.getElementById('vlan-num').value.trim();
+  const name    = document.getElementById('vlan-name').value.trim();
+  if (!subnet) { msg('vlan-msg', '✗ Subnet is required', 'err'); return; }
+  if (!/^\d+\.\d+\.\d+\.\d+\/\d+$/.test(subnet)) {
     msg('vlan-msg', '✗ Format: 192.168.10.0/24', 'err'); return;
   }
+  const entry = {subnet};
+  if (vlanNum) entry.vlan = parseInt(vlanNum, 10);
+  if (name)    entry.name = name;
   try {
     const cfg = await api('/api/config');
-    const vlans = cfg.manual_vlans || [];
-    if (!vlans.includes(val)) vlans.push(val);
+    const vlans = (cfg.manual_vlans || []).filter(v => _vlanSubnet(v) !== subnet);
+    vlans.push(entry);
     const r = await api('/api/config', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({manual_vlans: vlans}),
@@ -633,15 +662,18 @@ async function addVlan() {
     if (r.status === 'saved') {
       msg('vlan-msg', '✓ Added — rescan to apply', 'ok');
       document.getElementById('vlan-input').value = '';
+      document.getElementById('vlan-num').value   = '';
+      document.getElementById('vlan-name').value  = '';
       loadVlans();
     }
   } catch(e) { msg('vlan-msg', '✗ Error', 'err'); }
 }
 
-async function removeVlan(subnet) {
+async function removeVlan(idx) {
   try {
     const cfg = await api('/api/config');
-    const vlans = (cfg.manual_vlans || []).filter(v => v !== subnet);
+    const vlans = (cfg.manual_vlans || []);
+    vlans.splice(idx, 1);
     await api('/api/config', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({manual_vlans: vlans}),

@@ -131,6 +131,10 @@ Once configured, Mild-Viking pulls DHCP leases and ARP table entries to enrich d
   <img src="resources/mild-viking-5.png" alt="Mild-Viking dashboard — Hall of Records and stats" width="720">
 </p>
 
+<p align="center">
+  <img src="resources/mild-viking-6.png" alt="Mild-Viking — Hall of Records top scores" width="720">
+</p>
+
 ---
 
 ## Configuration

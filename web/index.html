@@ -1229,14 +1229,17 @@ bubbleCanvas.addEventListener('mouseleave', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 
-function updateVlans(vlans, subnet, gateway) {
+function updateVlans(vlans, labels, subnet, gateway) {
   const list = el('vlans-list');
   const nets = vlans && vlans.length ? vlans : (subnet ? [subnet] : []);
   if (!nets.length) {
     list.innerHTML = '<div class="vlan-item" style="opacity:.4">No subnets found</div>';
     return;
   }
-  list.innerHTML = nets.map(n => `<div class="vlan-item">${n}</div>`).join('');
+  list.innerHTML = nets.map((n, i) => {
+    const lbl = (labels && labels[i] && labels[i] !== n) ? labels[i] : n;
+    return `<div class="vlan-item">${lbl}</div>`;
+  }).join('');
   if (gateway) {
     list.innerHTML += `<div class="vlan-item" style="opacity:.5;margin-top:8px">GW: ${gateway}</div>`;
   }
@@ -1276,7 +1279,7 @@ socket.on('status_update', data => {
   updateHUD(data);
   updateBubbles(data.devices || []);
   if (data.vlan_subnets || data.subnet) {
-    updateVlans(data.vlan_subnets, data.subnet, data.gateway_ip);
+    updateVlans(data.vlan_subnets, data.vlan_labels, data.subnet, data.gateway_ip);
   }
   // Detect speedtest completion via the status stream (reliable fallback)
   if (_speedtestWaiting) {
@@ -1389,6 +1392,20 @@ async function _loadHof() {
           <span class="hof-card-value">${c.value}</span>
         </div>
       </div>`).join('');
+
+    // Subnet device counts
+    const subnets = d.subnet_counts || [];
+    if (subnets.length > 1) {
+      html += `<div class="hof-cat"><span class="hof-cat-icon">🌐</span>DEVICES PER SUBNET</div>`;
+      html += subnets.map(s => `
+        <div class="hof-card">
+          <div class="hof-card-device">${s.label !== s.subnet ? s.label : s.subnet}</div>
+          <div class="hof-card-meta">
+            <span class="hof-card-ip">${s.label !== s.subnet ? s.subnet : ''}</span>
+            <span class="hof-card-value">${s.count} online</span>
+          </div>
+        </div>`).join('');
+    }
 
     // Speed test leaderboards
     html += `<div class="hof-cat"><span class="hof-cat-icon">⚡</span>TOP DOWNLOAD SPEEDS</div>`;
