@@ -12,7 +12,7 @@ NC='\033[0m' # No Color
 HOSTAPD_CONFIG="/tmp/ragnar/hostapd.conf"
 DNSMASQ_CONFIG="/tmp/ragnar/dnsmasq.conf"
 INTERFACE="wlan0"
-AP_IP="192.168.4.1"
+AP_IP="192.168.1.2"
 
 print_status() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -103,7 +103,8 @@ start_ap() {
     print_status "AP Details:"
     print_status "  Interface: $INTERFACE"
     print_status "  IP Address: $AP_IP"
-    print_status "  DHCP Range: 192.168.4.2 - 192.168.4.20"
+    print_status "  DHCP Range: 192.168.1.3 - 192.168.1.20"
+    print_status "  Setup URL:  http://$AP_IP:8000/settings"
 }
 
 # Stop Access Point mode

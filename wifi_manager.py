@@ -120,8 +120,8 @@ class WiFiManager:
         self.ap_ssid = shared_data.config.get('wifi_ap_ssid', 'MILD-VIKING WIFI')
         self.ap_password = shared_data.config.get('wifi_ap_password', 'mildviking')
         self.ap_interface = self.default_wifi_interface
-        self.ap_ip = "192.168.4.1"
-        self.ap_subnet = "192.168.4.0/24"
+        self.ap_ip = "192.168.1.2"
+        self.ap_subnet = "192.168.1.0/24"
         # Wardriving AP (KEY1 on the e-paper) — brought up on a spare/borrowed
         # adapter so wardriving keeps running. Track prior state for teardown.
         self._wardrive_ap_prev_interface = None
@@ -2533,55 +2533,34 @@ rsn_pairwise=CCMP
             
             if dns_enabled:
                 # Full configuration with DNS for captive portal
-                config_content = f"""# Interface configuration
-interface={self.ap_interface}
-# DHCP range
-dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
-# DHCP authoritative
+                config_content = f"""interface={self.ap_interface}
+dhcp-range=192.168.1.3,192.168.1.20,255.255.255.0,24h
 dhcp-authoritative
-# Bind to specific interface only
 bind-interfaces
-# Log DHCP activity
 log-dhcp
-# Gateway option
 dhcp-option=3,{self.ap_ip}
-# DNS option (point to ourselves for captive portal)
 dhcp-option=6,{self.ap_ip}
-# Enable DNS on port 53
 port=53
-# Listen only on our AP IP
 listen-address={self.ap_ip}
-# Don't read system files that might conflict
 no-resolv
 no-hosts
 no-poll
-# Captive portal - redirect all domains to AP
 address=/#/{self.ap_ip}
-# But allow some connectivity test domains to work
 server=/connectivitycheck.gstatic.com/8.8.8.8
 server=/www.gstatic.com/8.8.8.8
 server=/clients3.google.com/8.8.8.8
-# Fallback DNS servers
 server=8.8.8.8
 server=8.8.4.4
 """
             else:
                 # Minimal configuration - DHCP only, no DNS conflicts
-                config_content = f"""# Interface configuration
-interface={self.ap_interface}
-# DHCP range
-dhcp-range=192.168.4.2,192.168.4.20,255.255.255.0,24h
-# DHCP authoritative
+                config_content = f"""interface={self.ap_interface}
+dhcp-range=192.168.1.3,192.168.1.20,255.255.255.0,24h
 dhcp-authoritative
-# Bind to specific interface only
 bind-interfaces
-# Log DHCP activity
 log-dhcp
-# Gateway option
 dhcp-option=3,{self.ap_ip}
-# DNS option (use public DNS)
 dhcp-option=6,8.8.8.8,8.8.4.4
-# Disable DNS server to avoid conflicts
 port=0
 """
             
