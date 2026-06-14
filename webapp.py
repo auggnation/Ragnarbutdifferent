@@ -566,9 +566,12 @@ def api_firewall_test():
         if not fw_type or not fw_url:
             return jsonify({'ok': False, 'error': 'Firewall type and URL are required'})
         ok, msg = test_firewall_connection(fw_type, fw_url, fw_key, fw_sec, fw_ssl)
-        return jsonify({'ok': ok, 'message': msg})
-    except ImportError:
-        return jsonify({'ok': False, 'error': 'firewall_integration module not found'})
+        if ok:
+            return jsonify({'ok': True, 'message': msg})
+        else:
+            return jsonify({'ok': False, 'error': msg})
+    except ImportError as e:
+        return jsonify({'ok': False, 'error': f'Missing dependency: {e} — run: pip install requests'})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
 

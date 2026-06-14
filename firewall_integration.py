@@ -95,10 +95,48 @@ def _opnsense_hostnames(base_url: str, key: str, secret: str, verify_ssl: bool) 
 def _opnsense_test(base_url: str, key: str, secret: str, verify_ssl: bool):
     base = _make_base_url(base_url)
     s    = _session(verify_ssl)
-    auth = (key, secret)
-    data = _opnsense_get(s, base, 'core/firmware/info', auth)
-    ver  = data.get('product_version') or data.get('firmware_version') or '?'
-    return True, f"OPNsense {ver} — connected to {base}"
+
+    # Step 1 — can we reach the host at all (no auth)?
+    try:
+        r0 = s.get(base, timeout=5, allow_redirects=True)
+        # Any HTTP response (even 401/404) means the host is up
+    except requests.exceptions.SSLError:
+        return False, (
+            f"SSL certificate error connecting to {base}. "
+            "Uncheck 'Verify SSL certificate' in settings (OPNsense uses a self-signed cert by default)."
+        )
+    except requests.exceptions.ConnectionError:
+        return False, f"Cannot reach {base} — check the IP address and that port 443 is reachable from this Pi."
+    except requests.exceptions.Timeout:
+        return False, f"Timed out connecting to {base} — check firewall rules allowing the Pi to reach the router."
+
+    # Step 2 — try the API with credentials
+    try:
+        auth = (key, secret)
+        data = _opnsense_get(s, base, 'core/firmware/info', auth)
+        ver  = data.get('product_version') or data.get('firmware_version') or '?'
+        return True, f"OPNsense {ver} connected at {base}"
+    except requests.exceptions.HTTPError as e:
+        code = e.response.status_code if e.response is not None else '?'
+        if code == 401:
+            return False, (
+                f"Host {base} is reachable but authentication failed (HTTP 401). "
+                "Check API key and secret — generate them in OPNsense under "
+                "System → Access → Users → (your user) → API keys."
+            )
+        if code == 403:
+            return False, (
+                f"Authenticated but access denied (HTTP 403). "
+                "The API user needs Diagnostics and DHCP read privileges in OPNsense."
+            )
+        if code == 404:
+            return False, (
+                f"API endpoint not found (HTTP 404) at {base}/api/core/firmware/info. "
+                "Confirm this is an OPNsense device and the API is enabled."
+            )
+        return False, f"HTTP {code} error from {base} — {e}"
+    except Exception as e:
+        return False, f"API error from {base}: {e}"
 
 
 # ── pfSense ───────────────────────────────────────────────────────────
