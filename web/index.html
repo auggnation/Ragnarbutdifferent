@@ -1025,10 +1025,17 @@ function updateBubbles(devices) {
     const targetR = 18 + Math.min(52, Math.sqrt(totalRate / 300));
 
     if (!_bubbleNodes[ip]) {
+      // Spread new bubbles in a golden-ratio spiral so large groups don't overlap
+      const idx = Object.keys(_bubbleNodes).length;
+      const goldenAngle = 2.39996; // radians
+      const spiral = Math.sqrt(idx + 1) * 60;
+      const angle  = idx * goldenAngle;
+      const cx = W / 2, cy = H / 2;
+      const sx = Math.max(targetR + 10, Math.min(W - targetR - 10, cx + Math.cos(angle) * spiral));
+      const sy = Math.max(targetR + 60, Math.min(H - targetR - 50, cy + Math.sin(angle) * spiral));
       _bubbleNodes[ip] = {
         ip, mac: d.mac || '', hostname: d.hostname || '', label: d.hostname || ip,
-        x: W * 0.15 + Math.random() * W * 0.70,
-        y: H * 0.20 + Math.random() * H * 0.60,
+        x: sx, y: sy,
         vx: (Math.random() - 0.5) * 0.4,
         vy: (Math.random() - 0.5) * 0.4,
         r: targetR, targetR,
@@ -1067,6 +1074,26 @@ function _drawBubbles(ts) {
   const pal = PALETTES[mode] || PALETTES.idle;
   const nodes = Object.values(_bubbleNodes);
   const scx = W / 2, scy = H / 2;
+
+  // Bubble-to-bubble repulsion — O(n²) but fine up to ~300 nodes at 60fps
+  // Skip every other frame for large groups to keep it smooth
+  const doRepulse = nodes.length < 80 || (Date.now() % 2 === 0);
+  if (doRepulse) {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
+        const minDist = a.r + b.r + 6;
+        if (dist < minDist) {
+          const push = (minDist - dist) / minDist * 0.15;
+          const nx = dx / dist, ny = dy / dist;
+          a.vx -= nx * push;  a.vy -= ny * push;
+          b.vx += nx * push;  b.vy += ny * push;
+        }
+      }
+    }
+  }
 
   nodes.forEach(n => {
     // Physics: drift + soft wall bounce

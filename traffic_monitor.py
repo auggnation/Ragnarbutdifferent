@@ -568,7 +568,7 @@ class TrafficMonitor:
                 dev['mac'] = mac
                 dev['hostname'] = hostname
 
-            self.devices = all_devices[:100]
+            self.devices = all_devices[:500]
             self.device_count = len(all_devices)
             self.vlan_subnets = subnets
             self.vlan_labels  = [subnet_labels.get(s, s) for s in subnets]
@@ -938,7 +938,7 @@ class TrafficMonitor:
                 'subnet': self.subnet,
                 'vlan_subnets': list(self.vlan_subnets),
                 'vlan_labels':  list(self.vlan_labels),
-                'devices': self._enrich_devices(self.devices[:50]),
+                'devices': self._enrich_devices(list(self.devices)),
                 'speedtest_dl': self.speedtest_dl,
                 'speedtest_ul': self.speedtest_ul,
                 'speedtest_ping': self.speedtest_ping,
