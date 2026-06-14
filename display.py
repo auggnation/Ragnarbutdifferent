@@ -828,7 +828,7 @@ class Display:
             
             # Alternative check: see if we're listening on AP interface
             result = subprocess.run(['ip', 'addr', 'show', self._wifi_iface], capture_output=True, text=True)
-            if result.returncode == 0 and '192.168.4.1' in result.stdout:
+            if result.returncode == 0 and '192.168.1.2' in result.stdout:
                 return True
                 
             return False
@@ -3160,8 +3160,14 @@ class Display:
                 # ════════════════════════════════════════════════════════
                 # PERMANENT: IP on its own line, NETWORK on its own line
                 # ════════════════════════════════════════════════════════
-                _ip_str  = current_ip if current_ip else '---'
-                _net_str = current_ssid if current_ssid else (conn_type.upper() if conn_type else 'NO NET')
+                _ap_active = getattr(self.shared_data, 'ap_mode_active', False)
+                if _ap_active:
+                    _ap_ssid = self.config.get('wifi_ap_ssid', 'MILD-VIKING WIFI')
+                    _ip_str  = '192.168.1.2:8000'
+                    _net_str = f'AP: {_ap_ssid}'
+                else:
+                    _ip_str  = current_ip if current_ip else '---'
+                    _net_str = current_ssid if current_ssid else (conn_type.upper() if conn_type else 'NO NET')
                 _py = _img_actual_bottom + _lh   # full line gap after Viking
                 draw.text((int(4 * sx), _py), _ip_str[:24],
                           font=self.shared_data.font_arial9, fill=0)

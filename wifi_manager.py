@@ -2125,8 +2125,9 @@ class WiFiManager:
             self.ap_logger.debug("DHCP leases not available, checking ARP table...")
             result = subprocess.run(['arp', '-a'], capture_output=True, text=True, timeout=5)
             if result.returncode == 0:
-                # Count IPs in AP subnet (192.168.4.x)
-                ap_clients = [line for line in result.stdout.split('\n') if '192.168.4.' in line]
+                # Count IPs in AP subnet (192.168.1.x, excluding the AP itself at .2)
+                ap_clients = [line for line in result.stdout.split('\n')
+                              if '192.168.1.' in line and '192.168.1.2' not in line]
                 client_count = len(ap_clients)
                 
                 if client_count != getattr(self, 'last_client_count', 0):

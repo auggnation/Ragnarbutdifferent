@@ -17,19 +17,25 @@ Originally forked from [Ragnar](https://github.com/PierreGode/Ragnar) (which des
 ### Web Dashboard
 
 <p align="center">
-  <img src="resources/mild-viking-1.png" alt="Mild-Viking dashboard — device bubbles and radar sweep" width="700">
+  <img src="resources/mild-viking-1.png" alt="Mild-Viking dashboard — device bubbles and radar sweep" width="720">
 </p>
 
+<br>
+
 <p align="center">
-  <img src="resources/mild-viking-5.png" alt="Mild-Viking dashboard — Hall of Records and stats" width="700">
+  <img src="resources/mild-viking-5.png" alt="Mild-Viking dashboard — Hall of Records and stats" width="720">
 </p>
+
+<br>
 
 ### E-Paper Display
 
 <p align="center">
-  <img src="resources/mild-viking-2.png" alt="E-paper display — main screen" width="320">
-  <img src="resources/mild-viking-3.png" alt="E-paper display — device list" width="320">
-  <img src="resources/mild-viking-4.png" alt="E-paper display — speed test" width="320">
+  <img src="resources/mild-viking-2.png" alt="E-paper display — main screen" width="280">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="resources/mild-viking-3.png" alt="E-paper display — device list" width="280">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="resources/mild-viking-4.png" alt="E-paper display — speed test" width="280">
 </p>
 
 ---
