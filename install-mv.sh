@@ -74,7 +74,7 @@ SYSTEM_PKGS=(
 
     # Network tools (WiFi management, AP mode, device scanning)
     network-manager iproute2 net-tools iputils-ping
-    arp-scan nmap
+    arp-scan nmap tcpdump
 
     # AP mode (hotspot when no WiFi is configured)
     hostapd dnsmasq
@@ -254,6 +254,10 @@ ARP_SCAN=$(command -v arp-scan 2>/dev/null || true)
 NMAP_BIN=$(command -v nmap 2>/dev/null || true)
 [ -n "$NMAP_BIN" ] && \
     setcap cap_net_raw,cap_net_admin+eip "$NMAP_BIN" 2>/dev/null && ok "nmap: raw socket capability set"
+
+TCPDUMP_BIN=$(command -v tcpdump 2>/dev/null || true)
+[ -n "$TCPDUMP_BIN" ] && \
+    setcap cap_net_raw,cap_net_admin+eip "$TCPDUMP_BIN" 2>/dev/null && ok "tcpdump: raw socket capability set"
 
 # ── Pi-specific: enable SPI and I2C for e-paper display ───────────────
 if [ "$IS_ARM" = true ] && command -v raspi-config &>/dev/null; then

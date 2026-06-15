@@ -104,6 +104,13 @@ class TrafficMonitor:
         # Per-device traffic attribution (ip → {connections, rate_in, rate_out})
         self._dev_traffic = {}
 
+        # Packet capture (tcpdump promiscuous mode) — accumulating byte counters per IP
+        self._capture_counts  = {}        # ip → {bytes_in, bytes_out}  — monotonic accumulator
+        self._capture_snap    = {}        # ip → {bytes_in, bytes_out}  — snapshot at last rate calc
+        self._capture_snap_t  = time.time()
+        self._using_pcap      = False     # set True once tcpdump starts
+        self._capture_thread  = None
+
         # Monthly per-device totals (ip → {bytes_in, bytes_out}); resets each month
         self._monthly_traffic = {}
         self._monthly_month   = time.strftime('%Y-%m')
@@ -166,11 +173,17 @@ class TrafficMonitor:
         )
         self._speedtest_thread.start()
 
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop, daemon=True, name="packet-capture"
+        )
+        self._capture_thread.start()
+
         logger.info("Traffic monitor started")
 
     def stop(self):
         self._stop.set()
-        for t in (self._traffic_thread, self._scan_thread, self._speedtest_thread):
+        for t in (self._traffic_thread, self._scan_thread,
+                  self._speedtest_thread, self._capture_thread):
             if t and t.is_alive():
                 t.join(timeout=5)
         logger.info("Traffic monitor stopped")
@@ -192,22 +205,24 @@ class TrafficMonitor:
 
                 self._prev_sent, self._prev_recv, self._prev_time = sent, recv, now
 
-                mode, intensity = self._calc_mode(sr + rr)
-
                 with self._lock:
                     self.bytes_sent = sent
                     self.bytes_recv = recv
-                    self.sent_rate = sr
-                    self.recv_rate = rr
-                    self.total_rate = sr + rr
-                    self.sent_history.append(sr)
-                    self.recv_history.append(rr)
-                    self.animation_mode = mode
-                    self.animation_intensity = intensity
                     self.uptime_seconds = now - self.start_time
                     hours = self.uptime_seconds / 3600.0
                     self.level = max(1, int(hours) + 1)
                     self.level_progress = hours - int(hours)
+                    # Only update rates/history from interface counters when pcap is not
+                    # running — pcap provides accurate LAN-wide rates and updates these itself
+                    if not self._using_pcap:
+                        mode, intensity = self._calc_mode(sr + rr)
+                        self.sent_rate = sr
+                        self.recv_rate = rr
+                        self.total_rate = sr + rr
+                        self.sent_history.append(sr)
+                        self.recv_history.append(rr)
+                        self.animation_mode = mode
+                        self.animation_intensity = intensity
 
                 # Cycle animation style
                 if now - self._last_style_cycle >= self._STYLE_INTERVAL:
@@ -225,9 +240,8 @@ class TrafficMonitor:
                     self._save_stats()
                     self._last_save = now
 
-                # Attribute traffic to devices every 5 s
-                if int(now) % 5 == 0:
-                    self._attribute_device_traffic(sr, rr)
+                # Update per-device rates every loop tick
+                self._compute_device_rates(elapsed)
 
             except Exception as exc:
                 logger.error(f"Traffic loop error: {exc}")
@@ -778,7 +792,206 @@ class TrafficMonitor:
 
         return []
 
-    # ── Per-device traffic attribution ───────────────────────────────
+    # ── Packet capture (promiscuous mode) ────────────────────────────
+
+    def _capture_loop(self):
+        """Run tcpdump on the local interface and count bytes per IP.
+        Gives real per-device traffic instead of estimated distribution."""
+        import ipaddress
+
+        _subnet_cache: dict = {}   # ip → bool  (is this IP on a local subnet?)
+        _last_iface = None
+        _proc = None
+
+        def _is_local(ip):
+            if ip in _subnet_cache:
+                return _subnet_cache[ip]
+            with self._lock:
+                nets = list(self.vlan_subnets) or ([self.subnet] if self.subnet else [])
+            try:
+                ip_obj = ipaddress.ip_address(ip)
+                for sn in nets:
+                    if sn and ip_obj in ipaddress.ip_network(sn, strict=False):
+                        _subnet_cache[ip] = True
+                        return True
+            except Exception:
+                pass
+            _subnet_cache[ip] = False
+            return False
+
+        while not self._stop.is_set():
+            with self._lock:
+                iface = self.interface_name
+
+            if not iface:
+                self._stop.wait(5)
+                continue
+
+            # Restart capture if interface changed
+            if iface != _last_iface:
+                if _proc:
+                    try:
+                        _proc.kill()
+                    except Exception:
+                        pass
+                _proc = None
+                _last_iface = iface
+                _subnet_cache.clear()
+
+            try:
+                cmd = ['tcpdump', '-i', iface, '-nn', '-q', '-l', '-t',
+                       '--packet-buffered', 'ip']
+                _proc = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    text=True, bufsize=1
+                )
+                self._using_pcap = True
+                logger.info(f"Packet capture started on {iface}")
+
+                for raw in _proc.stdout:
+                    if self._stop.is_set():
+                        break
+                    if self.interface_name != iface:
+                        break  # interface changed — restart
+
+                    line = raw.strip()
+                    # Format: "IP src.port > dst.port: proto length"
+                    m = re.match(r'IP\s+(\S+)\s+>\s+(\S+):', line)
+                    if not m:
+                        continue
+
+                    # Strip port suffix (last .NNN)
+                    src = re.sub(r'\.\d+$', '', m.group(1))
+                    dst = re.sub(r'\.\d+$', '', m.group(2))
+
+                    # L4 payload length from end of line + estimated header overhead
+                    lm = re.search(r'\s(\d+)\s*$', line)
+                    pkt_bytes = (int(lm.group(1)) + 54) if lm else 80
+
+                    src_local = _is_local(src)
+                    dst_local = _is_local(dst)
+                    if not src_local and not dst_local:
+                        continue
+
+                    with self._lock:
+                        if src_local:
+                            e = self._capture_counts.setdefault(
+                                src, {'bytes_in': 0, 'bytes_out': 0})
+                            e['bytes_out'] += pkt_bytes
+                        if dst_local:
+                            e = self._capture_counts.setdefault(
+                                dst, {'bytes_in': 0, 'bytes_out': 0})
+                            e['bytes_in'] += pkt_bytes
+
+                if _proc:
+                    _proc.kill()
+
+            except FileNotFoundError:
+                logger.warning(
+                    "tcpdump not found — install it for accurate per-device traffic: "
+                    "sudo apt install tcpdump"
+                )
+                self._using_pcap = False
+                return  # no point retrying without tcpdump
+            except PermissionError:
+                logger.warning(
+                    "tcpdump permission denied — ensure CAP_NET_RAW capability or run as root"
+                )
+                self._using_pcap = False
+                return
+            except Exception as e:
+                logger.debug(f"Capture loop: {e}")
+                self._using_pcap = False
+                self._stop.wait(10)
+
+    def _compute_device_rates(self, elapsed):
+        """Route to pcap-based rates if capture is running, else estimate from connections."""
+        if self._using_pcap:
+            self._compute_pcap_rates()
+        else:
+            with self._lock:
+                sr = self.sent_rate
+                rr = self.recv_rate
+            self._attribute_device_traffic(rr, sr)
+
+    def _compute_pcap_rates(self):
+        """Convert pcap byte accumulator deltas into per-device rates and update totals."""
+        now = time.time()
+        snap_elapsed = now - self._capture_snap_t
+        if snap_elapsed < 1.0:
+            return
+
+        with self._lock:
+            counts = {ip: dict(c) for ip, c in self._capture_counts.items()}
+
+        prev  = self._capture_snap
+        alpha = 0.3
+        updated      = {}
+        daily_delta  = {}
+        monthly_delta = {}
+        total_in = total_out = 0.0
+
+        for ip, c in counts.items():
+            p   = prev.get(ip, {'bytes_in': 0, 'bytes_out': 0})
+            bi  = max(0, c['bytes_in']  - p['bytes_in'])
+            bo  = max(0, c['bytes_out'] - p['bytes_out'])
+            ri  = bi / snap_elapsed
+            ro  = bo / snap_elapsed
+            prev_rates = self._dev_traffic.get(ip, {})
+            updated[ip] = {
+                'connections': 0,
+                'rate_in':  alpha * ri + (1 - alpha) * prev_rates.get('rate_in',  0.0),
+                'rate_out': alpha * ro + (1 - alpha) * prev_rates.get('rate_out', 0.0),
+            }
+            total_in  += updated[ip]['rate_in']
+            total_out += updated[ip]['rate_out']
+            if bi or bo:
+                daily_delta[ip]    = {'bytes_in': bi, 'bytes_out': bo}
+                monthly_delta[ip]  = {'bytes_in': bi, 'bytes_out': bo}
+
+        self._capture_snap   = counts
+        self._capture_snap_t = now
+
+        with self._lock:
+            self._dev_traffic = updated
+
+            # Update global rates from real captured data
+            self.recv_rate  = total_in
+            self.sent_rate  = total_out
+            self.total_rate = total_in + total_out
+            self.recv_history.append(total_in)
+            self.sent_history.append(total_out)
+            mode, intensity = self._calc_mode(self.total_rate)
+            self.animation_mode      = mode
+            self.animation_intensity = intensity
+
+            # Daily totals
+            cur_day = time.strftime('%Y-%m-%d')
+            if cur_day != self._today_str:
+                self._daily_history.append({
+                    'date': self._today_str,
+                    'traffic': dict(self._daily_traffic),
+                })
+                self._daily_history = self._daily_history[-30:]
+                self._daily_traffic = {}
+                self._today_str = cur_day
+                self._save_stats()
+            for ip, d in daily_delta.items():
+                e = self._daily_traffic.setdefault(ip, {'bytes_in': 0, 'bytes_out': 0})
+                e['bytes_in']  += d['bytes_in']
+                e['bytes_out'] += d['bytes_out']
+
+            # Monthly totals
+            cur_month = time.strftime('%Y-%m')
+            if cur_month != self._monthly_month:
+                self._monthly_traffic = {}
+                self._monthly_month = cur_month
+            for ip, d in monthly_delta.items():
+                e = self._monthly_traffic.setdefault(ip, {'bytes_in': 0, 'bytes_out': 0})
+                e['bytes_in']  += d['bytes_in']
+                e['bytes_out'] += d['bytes_out']
+
+    # ── Per-device traffic attribution (fallback) ─────────────────────
 
     def _get_active_connections(self):
         """Return {remote_ip: connection_count} for active TCP connections."""
