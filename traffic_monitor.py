@@ -111,6 +111,13 @@ class TrafficMonitor:
         self._using_pcap      = False     # set True once tcpdump starts
         self._capture_thread  = None
 
+        # Firewall traffic — per-device rates pulled from OPNsense/pfSense API (highest priority)
+        self._fw_traffic       = {}       # ip → {rate_in, rate_out}  bytes/s
+        self._fw_traffic_t     = 0.0     # time of last successful fetch
+        self._fw_apply_t       = 0.0     # time rates were last applied to daily totals
+        self._using_fw_traffic = False
+        self._fw_traffic_thread = None
+
         # Monthly per-device totals (ip → {bytes_in, bytes_out}); resets each month
         self._monthly_traffic = {}
         self._monthly_month   = time.strftime('%Y-%m')
@@ -178,12 +185,18 @@ class TrafficMonitor:
         )
         self._capture_thread.start()
 
+        self._fw_traffic_thread = threading.Thread(
+            target=self._fw_traffic_loop, daemon=True, name="fw-traffic"
+        )
+        self._fw_traffic_thread.start()
+
         logger.info("Traffic monitor started")
 
     def stop(self):
         self._stop.set()
         for t in (self._traffic_thread, self._scan_thread,
-                  self._speedtest_thread, self._capture_thread):
+                  self._speedtest_thread, self._capture_thread,
+                  self._fw_traffic_thread):
             if t and t.is_alive():
                 t.join(timeout=5)
         logger.info("Traffic monitor stopped")
@@ -904,9 +917,104 @@ class TrafficMonitor:
                 self._using_pcap = False
                 self._stop.wait(10)
 
+    def _fw_traffic_loop(self):
+        """Poll firewall API every 5 s for per-device traffic rates.
+        Firewall sees all VLANs and is more accurate than pcap on a non-gateway Pi."""
+        while not self._stop.is_set():
+            cfg = getattr(self.shared_data, 'config', {}) if self.shared_data else {}
+            fw_type = cfg.get('firewall_type', '')
+            fw_url  = cfg.get('firewall_url', '')
+            if fw_type and fw_url:
+                try:
+                    from firewall_integration import fetch_traffic as _fw_tr
+                    traffic = _fw_tr(
+                        fw_type, fw_url,
+                        cfg.get('firewall_api_key', ''),
+                        cfg.get('firewall_api_secret', ''),
+                        bool(cfg.get('firewall_verify_ssl', False)),
+                    )
+                    if traffic:
+                        self._fw_traffic       = traffic
+                        self._fw_traffic_t     = time.time()
+                        self._using_fw_traffic = True
+                    else:
+                        self._using_fw_traffic = False
+                except Exception as e:
+                    logger.debug(f"fw_traffic_loop: {e}")
+                    self._using_fw_traffic = False
+            else:
+                self._using_fw_traffic = False
+            self._stop.wait(5)
+
+    def _apply_fw_traffic(self):
+        """Merge firewall-provided per-device rates into _dev_traffic and daily totals."""
+        now     = time.time()
+        elapsed = now - self._fw_apply_t if self._fw_apply_t else 0.0
+        self._fw_apply_t = now
+
+        fw     = dict(self._fw_traffic)
+        alpha  = 0.3
+        updated      = {}
+        total_in = total_out = 0.0
+        daily_delta   = {}
+        monthly_delta = {}
+
+        for ip, rates in fw.items():
+            ri = float(rates.get('rate_in',  0))
+            ro = float(rates.get('rate_out', 0))
+            prev = self._dev_traffic.get(ip, {})
+            updated[ip] = {
+                'connections': 0,
+                'rate_in':  alpha * ri + (1 - alpha) * prev.get('rate_in',  0.0),
+                'rate_out': alpha * ro + (1 - alpha) * prev.get('rate_out', 0.0),
+            }
+            total_in  += updated[ip]['rate_in']
+            total_out += updated[ip]['rate_out']
+            if elapsed > 0 and (ri or ro):
+                bi = int(ri * elapsed)
+                bo = int(ro * elapsed)
+                daily_delta[ip]   = {'bytes_in': bi, 'bytes_out': bo}
+                monthly_delta[ip] = {'bytes_in': bi, 'bytes_out': bo}
+
+        with self._lock:
+            self._dev_traffic = updated
+            self.recv_rate    = total_in
+            self.sent_rate    = total_out
+            self.total_rate   = total_in + total_out
+            self.recv_history.append(total_in)
+            self.sent_history.append(total_out)
+            mode, intensity = self._calc_mode(self.total_rate)
+            self.animation_mode      = mode
+            self.animation_intensity = intensity
+
+            cur_day = time.strftime('%Y-%m-%d')
+            if cur_day != self._today_str:
+                self._daily_history.append({'date': self._today_str,
+                                            'traffic': dict(self._daily_traffic)})
+                self._daily_history = self._daily_history[-30:]
+                self._daily_traffic = {}
+                self._today_str = cur_day
+                self._save_stats()
+            for ip, d in daily_delta.items():
+                e = self._daily_traffic.setdefault(ip, {'bytes_in': 0, 'bytes_out': 0})
+                e['bytes_in']  += d['bytes_in']
+                e['bytes_out'] += d['bytes_out']
+
+            cur_month = time.strftime('%Y-%m')
+            if cur_month != self._monthly_month:
+                self._monthly_traffic = {}
+                self._monthly_month = cur_month
+            for ip, d in monthly_delta.items():
+                e = self._monthly_traffic.setdefault(ip, {'bytes_in': 0, 'bytes_out': 0})
+                e['bytes_in']  += d['bytes_in']
+                e['bytes_out'] += d['bytes_out']
+
     def _compute_device_rates(self, elapsed):
-        """Route to pcap-based rates if capture is running, else estimate from connections."""
-        if self._using_pcap:
+        """Priority: firewall API (all VLANs) > pcap (local LAN) > connection estimate."""
+        fw_fresh = self._using_fw_traffic and (time.time() - self._fw_traffic_t) < 15
+        if fw_fresh:
+            self._apply_fw_traffic()
+        elif self._using_pcap:
             self._compute_pcap_rates()
         else:
             with self._lock:

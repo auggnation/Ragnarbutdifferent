@@ -362,6 +362,126 @@ def fetch_devices(fw_type: str, base_url: str, key: str, secret: str,
     return []
 
 
+def _opnsense_traffic(base_url: str, key: str, secret: str, verify_ssl: bool) -> dict:
+    """Return {ip: {rate_in: bytes/s, rate_out: bytes/s}} from OPNsense.
+
+    Tries diagnostics/traffic/top/{iface} for each active interface, which
+    queries pftop and returns per-host bandwidth.  Falls back to parsing the
+    connection-state table if the top endpoint is unavailable.
+    """
+    base = _make_base_url(base_url)
+    s    = _session(verify_ssl)
+    auth = (key, secret)
+    traffic: dict[str, dict] = {}
+
+    def _add(ip, rate_in_bps, rate_out_bps):
+        ip = (ip or '').strip()
+        if not ip or ip in ('0.0.0.0', '::', '255.255.255.255'):
+            return
+        # OPNsense returns bits/s — convert to bytes/s
+        ri = float(rate_in_bps  or 0) / 8
+        ro = float(rate_out_bps or 0) / 8
+        e  = traffic.setdefault(ip, {'rate_in': 0.0, 'rate_out': 0.0})
+        e['rate_in']  += ri
+        e['rate_out'] += ro
+
+    # Discover active interfaces (use the ones reported by ARP / interfaces list)
+    interfaces = []
+    try:
+        data = _opnsense_get(s, base, 'diagnostics/traffic/interface', auth)
+        interfaces = list((data.get('interfaces') or {}).keys())
+    except Exception:
+        pass
+    if not interfaces:
+        interfaces = ['']   # try without interface name
+
+    for intf in interfaces or ['']:
+        try:
+            path = f'diagnostics/traffic/top/{intf}' if intf else 'diagnostics/traffic/top'
+            data = _opnsense_get(s, base, path, auth)
+
+            # Format A — {"in-host": {"ip": {"bps": N}}, "out-host": {...}}
+            if 'in-host' in data or 'out-host' in data:
+                for ip, v in (data.get('in-host') or {}).items():
+                    bps = v.get('bps', v) if isinstance(v, dict) else v
+                    _add(ip, bps, 0)
+                for ip, v in (data.get('out-host') or {}).items():
+                    bps = v.get('bps', v) if isinstance(v, dict) else v
+                    _add(ip, 0, bps)
+                continue
+
+            # Format B — list of per-connection or per-host rows
+            rows = data if isinstance(data, list) else \
+                   data.get('rows', data.get('hosts', data.get('records', [])))
+            if isinstance(rows, list):
+                for row in rows:
+                    ip = row.get('src', row.get('source', row.get('address', row.get('ip', ''))))
+                    ri = row.get('rate_in',  row.get('in',  row.get('bps_in',  row.get('rate', 0))))
+                    ro = row.get('rate_out', row.get('out', row.get('bps_out', 0)))
+                    _add(ip, ri, ro)
+
+        except Exception as e:
+            logger.debug(f"OPNsense traffic/top ({intf}): {e}")
+
+    if traffic:
+        logger.debug(f"OPNsense traffic: {len(traffic)} devices")
+    return traffic
+
+
+def _pfsense_traffic(base_url: str, key: str, secret: str, verify_ssl: bool) -> dict:
+    """Return {ip: {rate_in: bytes/s, rate_out: bytes/s}} from pfSense."""
+    base = _make_base_url(base_url)
+    s    = _session(verify_ssl)
+    traffic: dict[str, dict] = {}
+
+    def _add(ip, ri, ro):
+        ip = (ip or '').strip()
+        if not ip:
+            return
+        e = traffic.setdefault(ip, {'rate_in': 0.0, 'rate_out': 0.0})
+        e['rate_in']  += float(ri or 0)
+        e['rate_out'] += float(ro or 0)
+
+    # pfSense-API traffic endpoint
+    for path in ('api/v1/diagnostics/traffic', 'api/v2/diagnostics/traffic'):
+        try:
+            data = _pfsense_get(s, base, path, key, secret)
+            rows = (data.get('data') or data) if isinstance(data, dict) else data
+            if isinstance(rows, list):
+                for row in rows:
+                    ip = row.get('src', row.get('address', row.get('ip', '')))
+                    ri = row.get('rate_in',  row.get('in',  row.get('bps_in',  0)))
+                    ro = row.get('rate_out', row.get('out', row.get('bps_out', 0)))
+                    _add(ip, ri, ro)
+                if traffic:
+                    break
+        except Exception as e:
+            logger.debug(f"pfSense traffic ({path}): {e}")
+
+    if traffic:
+        logger.debug(f"pfSense traffic: {len(traffic)} devices")
+    return traffic
+
+
+def fetch_traffic(fw_type: str, base_url: str, key: str, secret: str,
+                  verify_ssl: bool) -> dict:
+    """Return {ip: {rate_in: bytes/s, rate_out: bytes/s}} from the firewall.
+
+    This gives real per-device bandwidth across ALL VLANs because the router
+    sees every packet.  Returns empty dict if unavailable.
+    """
+    if not fw_type or not base_url:
+        return {}
+    try:
+        if fw_type == 'opnsense':
+            return _opnsense_traffic(base_url, key, secret, verify_ssl)
+        if fw_type == 'pfsense':
+            return _pfsense_traffic(base_url, key, secret, verify_ssl)
+    except Exception as e:
+        logger.debug(f"fetch_traffic ({fw_type}): {e}")
+    return {}
+
+
 def fetch_hostnames(fw_type: str, base_url: str, key: str, secret: str,
                     verify_ssl: bool) -> dict:
     """Return {mac: hostname}. Called by traffic_monitor on each scan."""
